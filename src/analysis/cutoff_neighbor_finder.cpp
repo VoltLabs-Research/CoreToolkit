@@ -1,6 +1,6 @@
-#include <opendxa/analysis/cutoff_neighbor_finder.h>
+#include <volt/analysis/cutoff_neighbor_finder.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positions, const SimulationCell& cellData){
     _cutoffRadius = cutoffRadius;

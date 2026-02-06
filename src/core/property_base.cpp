@@ -1,11 +1,11 @@
-#include <opendxa/core/property_base.h>
+#include <volt/core/property_base.h>
 #include <stdexcept>
 #include <cassert>
 #include <cstring> 
 #include <cstdio> 
 #include <algorithm>  
 
-namespace OpenDXA::Particles{
+namespace Volt::Particles{
 
 PropertyBase::PropertyBase()
 	: _dataType(DataType::Void)

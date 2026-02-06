@@ -1,8 +1,8 @@
-#include <opendxa/core/opendxa.h>
-#include <opendxa/math/affine_decomposition.h>
-#include <opendxa/math/matrix4.h>
+#include <volt/core/volt.h>
+#include <volt/math/affine_decomposition.h>
+#include <volt/math/matrix4.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 void decomp_affine(Matrix4& A, AffineDecomposition* parts);
 

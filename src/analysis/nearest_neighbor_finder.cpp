@@ -1,7 +1,7 @@
-#include <opendxa/analysis/nearest_neighbor_finder.h>
-#include <opendxa/core/particle_property.h>
+#include <volt/analysis/nearest_neighbor_finder.h>
+#include <volt/core/particle_property.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 // Returns the stored 3D position of the atom at the given index.
 // Ensures index is in bounds and then references the pre-loaded atom list.

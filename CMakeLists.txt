@@ -42,11 +42,7 @@ find_package(OpenMP REQUIRED)
 find_package(TBB REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
-
-# Embedded third-party dependencies
-if(EXISTS ${CMAKE_SOURCE_DIR}/dependencies/json/CMakeLists.txt)
-	add_subdirectory(${CMAKE_SOURCE_DIR}/dependencies/json)
-endif()
+find_package(nlohmann_json REQUIRED)
 
 # PTM library
 file(GLOB PTM_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/ptm/*.cpp)
@@ -87,14 +83,11 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	OpenMP::OpenMP_CXX
 	spdlog::spdlog
 	fmt::fmt
+	nlohmann_json::nlohmann_json
 	ptm
 	mwm_csp
 	geogram
 )
-
-if(TARGET nlohmann_json::nlohmann_json)
-	target_link_libraries(${PROJECT_NAME} PUBLIC nlohmann_json::nlohmann_json)
-endif()
 
 # Install main library and embedded libs
 install(TARGETS ${PROJECT_NAME} ptm mwm_csp geogram DESTINATION lib)
@@ -104,5 +97,10 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/ptm/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/geogram/ DESTINATION include FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/boost/ DESTINATION include/boost)
+if(EXISTS ${CMAKE_SOURCE_DIR}/dependencies/boost AND IS_DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/boost)
+	file(GLOB BOOST_FILES ${CMAKE_SOURCE_DIR}/dependencies/boost/*)
+	if(BOOST_FILES)
+		install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/boost/ DESTINATION include/boost)
+	endif()
+endif()
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/fast_float/ DESTINATION include FILES_MATCHING PATTERN "*.h")

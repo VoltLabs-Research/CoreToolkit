@@ -1,8 +1,8 @@
-#include <opendxa/utilities/json_utils.h>
+#include <volt/utilities/json_utils.h>
 #include <cstring>
 #include <limits>
 
-namespace OpenDXA {
+namespace Volt {
 
 // ============================================================================
 // MsgpackWriter implementation

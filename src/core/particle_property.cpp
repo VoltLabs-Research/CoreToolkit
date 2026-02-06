@@ -1,8 +1,8 @@
-#include <opendxa/core/particle_property.h>
+#include <volt/core/particle_property.h>
 #include <stdexcept>
 #include <cassert>
 
-namespace OpenDXA { namespace Particles {
+namespace Volt { namespace Particles {
 
 // Ctor por defecto
 ParticleProperty::ParticleProperty()
@@ -63,4 +63,4 @@ ParticleProperty::ParticleProperty(const ParticleProperty& other)
     , _type(other._type)
 {}
 
-}} // namespace OpenDXA::Particles
+}} // namespace Volt::Particles

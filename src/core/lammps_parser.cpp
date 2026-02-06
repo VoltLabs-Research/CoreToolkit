@@ -1,4 +1,4 @@
-#include <opendxa/core/lammps_parser.h>
+#include <volt/core/lammps_parser.h>
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -18,7 +18,7 @@
 #include <unistd.h>
 #endif
 
-namespace OpenDXA{
+namespace Volt{
 
 namespace {
 

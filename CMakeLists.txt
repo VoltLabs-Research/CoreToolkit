@@ -66,6 +66,7 @@ file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cp
 
 add_library(${PROJECT_NAME} STATIC ${LIBRARY_SOURCES})
 set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
 	${CMAKE_SOURCE_DIR}/include

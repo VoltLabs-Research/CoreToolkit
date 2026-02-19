@@ -23,6 +23,12 @@ public:
 	static std::shared_ptr<Particles::ParticleProperty> createPositionProperty(const LammpsParser::Frame& frame);
 
 	/**
+	 * Zero-copy position property bound to frame.positions memory.
+	 * The caller must keep the frame alive while the property is used.
+	 */
+	static std::shared_ptr<Particles::ParticleProperty> createPositionPropertyShared(const LammpsParser::Frame& frame);
+
+	/**
 	 * Builds an IdentifierProperty from the ids vector in a parsed frame.
 	 * Returns nullptr on allocation failure.
 	 */

@@ -9,7 +9,8 @@
 #include <thread>
 #include <fast_float/fast_float.h>
 
-#include <omp.h>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <fcntl.h>
@@ -240,8 +241,6 @@ inline int resolveThreads(){
     if(threads <= 0){
         threads = 1;
     }
-    omp_set_dynamic(0);
-    omp_set_num_threads(threads);
     return threads;
 }
 
@@ -484,10 +483,12 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
         }
 
         std::vector<size_t> counts(static_cast<size_t>(threads), 0);
-#pragma omp parallel for schedule(static)
-        for(int i = 0; i < threads; ++i){
-            counts[static_cast<size_t>(i)] = countNewlines(chunkStarts[i], chunkStarts[i + 1]);
-        }
+        tbb::parallel_for(tbb::blocked_range<int>(0, threads, 1),
+            [&](const tbb::blocked_range<int>& r){
+                for(int i = r.begin(); i < r.end(); ++i){
+                    counts[static_cast<size_t>(i)] = countNewlines(chunkStarts[i], chunkStarts[i + 1]);
+                }
+            });
 
         size_t totalLines = std::accumulate(counts.begin(), counts.end(), static_cast<size_t>(0));
         if(totalLines < static_cast<size_t>(frame.natoms)){
@@ -506,24 +507,26 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
         }
 
         std::atomic<bool> parseFailed(false);
-#pragma omp parallel for schedule(static)
-        for(int i = 0; i < threads; ++i){
-            if(parseFailed.load(std::memory_order_relaxed)) continue;
-            const char* p = chunkStarts[i];
-            const char* chunkEnd = chunkStarts[i + 1];
-            size_t index = offsets[static_cast<size_t>(i)];
-            size_t lines = counts[static_cast<size_t>(i)];
-            for(size_t lineIdx = 0; lineIdx < lines; ++lineIdx){
-                if(parseFailed.load(std::memory_order_relaxed)) break;
-                bool ok = true;
-                p = parseAtomLine(p, chunkEnd, cols, cell, frame, index, ok);
-                if(!ok){
-                    parseFailed.store(true, std::memory_order_relaxed);
-                    break;
+        tbb::parallel_for(tbb::blocked_range<int>(0, threads, 1),
+            [&](const tbb::blocked_range<int>& r){
+                for(int i = r.begin(); i < r.end(); ++i){
+                    if(parseFailed.load(std::memory_order_relaxed)) continue;
+                    const char* p = chunkStarts[i];
+                    const char* chunkEnd = chunkStarts[i + 1];
+                    size_t index = offsets[static_cast<size_t>(i)];
+                    size_t lines = counts[static_cast<size_t>(i)];
+                    for(size_t lineIdx = 0; lineIdx < lines; ++lineIdx){
+                        if(parseFailed.load(std::memory_order_relaxed)) break;
+                        bool ok = true;
+                        p = parseAtomLine(p, chunkEnd, cols, cell, frame, index, ok);
+                        if(!ok){
+                            parseFailed.store(true, std::memory_order_relaxed);
+                            break;
+                        }
+                        ++index;
+                    }
                 }
-                ++index;
-            }
-        }
+            });
 
         if(parseFailed.load(std::memory_order_relaxed)) return false;
     }

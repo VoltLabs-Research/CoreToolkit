@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 
 namespace Volt::Particles{
 
@@ -68,6 +69,13 @@ public:
                      bool                initializeMemory);
 
     ParticleProperty(const ParticleProperty& other);
+
+    void bindExternalData(void* data,
+                          std::size_t count,
+                          DataType dataType,
+                          std::size_t componentCount,
+                          std::size_t stride,
+                          std::shared_ptr<void> owner = {});
 
     Type type() const { return _type; }
 

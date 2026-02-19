@@ -63,4 +63,15 @@ ParticleProperty::ParticleProperty(const ParticleProperty& other)
     , _type(other._type)
 {}
 
+void ParticleProperty::bindExternalData(
+    void* data,
+    std::size_t count,
+    DataType dataType,
+    std::size_t componentCount,
+    std::size_t stride,
+    std::shared_ptr<void> owner
+){
+    PropertyBase::bindExternalData(data, count, dataType, componentCount, stride, std::move(owner));
+}
+
 }} // namespace Volt::Particles

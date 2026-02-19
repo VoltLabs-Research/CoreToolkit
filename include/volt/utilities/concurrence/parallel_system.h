@@ -1,6 +1,5 @@
 #pragma once
 
-#include <omp.h>
 #include <vector>
 #include <algorithm>
 #include <numeric>

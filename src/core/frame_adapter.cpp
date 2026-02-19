@@ -27,6 +27,26 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createPositionProperty(const Lam
 	return property;
 }
 
+std::shared_ptr<ParticleProperty> FrameAdapter::createPositionPropertyShared(const LammpsParser::Frame& frame){
+	auto property = std::make_shared<ParticleProperty>();
+	if(frame.positions.empty()){
+		spdlog::error("Frame positions buffer is empty");
+		return nullptr;
+	}
+
+	std::shared_ptr<void> owner(const_cast<std::vector<Point3>*>(&frame.positions), [](void*){});
+	property->bindExternalData(
+		const_cast<Point3*>(frame.positions.data()),
+		static_cast<size_t>(frame.natoms),
+		DataType::Double,
+		3,
+		sizeof(Point3),
+		std::move(owner)
+	);
+	property->setType(ParticleProperty::PositionProperty);
+	return property;
+}
+
 std::shared_ptr<ParticleProperty> FrameAdapter::createIdentifierProperty(const LammpsParser::Frame& frame){
 	std::shared_ptr<ParticleProperty> property(new ParticleProperty(frame.ids.size(), ParticleProperty::IdentifierProperty, 1, false));
 

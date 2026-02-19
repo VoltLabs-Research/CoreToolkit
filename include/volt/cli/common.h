@@ -18,7 +18,6 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
-#include <omp.h>
 
 namespace Volt::CLI {
 
@@ -26,11 +25,11 @@ using json = nlohmann::json;
 
 inline void initLogging(const std::string& toolName = "Volt", int threads = -1) {
     auto console_sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-    console_sink->set_level(spdlog::level::debug);
+    console_sink->set_level(spdlog::level::info);
     auto logger = std::make_shared<spdlog::logger>(toolName, console_sink);
-    logger->set_level(spdlog::level::debug);
+    logger->set_level(spdlog::level::info);
     spdlog::set_default_logger(logger);
-    spdlog::flush_on(spdlog::level::debug);
+    spdlog::flush_on(spdlog::level::info);
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S] [%l] %v");
     
     int n = threads > 0 ? threads : oneapi::tbb::info::default_concurrency();
@@ -156,6 +155,12 @@ inline ParallelConfig initParallelism(const std::map<std::string, std::string>& 
             threads = getEnvInt("OPENDXA_THREADS");
         }
         if (threads <= 0) {
+            threads = getEnvInt("TBB_NUM_THREADS");
+        }
+        if (threads <= 0) {
+            threads = getEnvInt("OMP_NUM_THREADS");
+        }
+        if (threads <= 0) {
             threads = fallback;
         }
         return threads;
@@ -163,7 +168,7 @@ inline ParallelConfig initParallelism(const std::map<std::string, std::string>& 
 
     int threads = 0;
     if (deterministicOpt.has_value()) {
-        threads = resolveThreads(oneapi::tbb::info::default_concurrency());
+        threads = deterministicOpt.value() ? 1 : resolveThreads(oneapi::tbb::info::default_concurrency());
     } else {
         int fallback = deterministicDefault ? 1 : oneapi::tbb::info::default_concurrency();
         threads = resolveThreads(fallback);
@@ -172,8 +177,6 @@ inline ParallelConfig initParallelism(const std::map<std::string, std::string>& 
     threads = std::max(1, threads);
     bool deterministic = (threads == 1);
 
-    omp_set_dynamic(0);
-    omp_set_num_threads(threads);
     auto tbbControl = std::make_unique<oneapi::tbb::global_control>(
         oneapi::tbb::global_control::max_allowed_parallelism, threads);
 

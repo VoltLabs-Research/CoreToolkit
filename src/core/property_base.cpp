@@ -55,12 +55,18 @@ PropertyBase::PropertyBase(
 }
 
 PropertyBase::PropertyBase(const PropertyBase& other)
-	: _dataType(other._dataType), _dataTypeSize(other._dataTypeSize), _numElements(other._numElements), _stride(other._stride)
-	, _componentCount(other._componentCount), _data(nullptr){
+	: _dataType(other._dataType)
+	, _dataTypeSize(other._dataTypeSize)
+	, _numElements(other._numElements)
+	, _stride(other._stride)
+	, _componentCount(other._componentCount)
+	, _data(nullptr)
+	, _externalData(nullptr)
+	, _externalOwner(nullptr){
 	if(_numElements > 0 && _stride > 0){
 		const auto bufSize = _numElements * _stride;
 		_data = std::make_unique<uint8_t[]>(bufSize);
-		std::memcpy(_data.get(), other._data.get(), bufSize);
+		std::memcpy(_data.get(), other.constData(), bufSize);
 	}
 }
 
@@ -70,6 +76,8 @@ void PropertyBase::resize(size_t newSize, bool preserveData){
 	if(newSize == _numElements) return;
 	if(newSize == 0){
 		_data.reset();
+		_externalData = nullptr;
+		_externalOwner.reset();
 		_numElements = 0;
 		return;
 	}
@@ -84,7 +92,53 @@ void PropertyBase::resize(size_t newSize, bool preserveData){
 	}
 
 	_data = std::move(newData);
+	_externalData = nullptr;
+	_externalOwner.reset();
 	_numElements = newSize;
+}
+
+void PropertyBase::bindExternalData(
+    void* data,
+    std::size_t count,
+    DataType dataType,
+    std::size_t componentCount,
+    std::size_t stride,
+    std::shared_ptr<void> owner
+){
+    if(dataType == DataType::Void && componentCount > 0){
+        throw std::runtime_error("PropertyBase: DATATYPE_VOID no puede tener componentCount > 0");
+    }
+
+    _dataTypeSize = [dataType]() -> size_t {
+        switch(dataType){
+            case DataType::Int:
+                return sizeof(int);
+            case DataType::Double:
+                return sizeof(double);
+            case DataType::Int64:
+                return sizeof(std::uint64_t);
+            case DataType::Void:
+                return 0;
+            default:
+                throw std::runtime_error("PropertyBase: Tipo de dato desconocido ID = " + std::to_string(static_cast<int>(dataType)));
+        }
+    }();
+
+    if(stride == 0 && componentCount > 0 && _dataTypeSize > 0){
+        stride = componentCount * _dataTypeSize;
+    }
+
+    if(count > 0 && stride == 0){
+        throw std::runtime_error("PropertyBase: Cannot bind external data with zero stride");
+    }
+
+    _data.reset();
+    _externalData = data;
+    _externalOwner = std::move(owner);
+    _dataType = dataType;
+    _componentCount = componentCount;
+    _stride = stride;
+    _numElements = count;
 }
 
 }

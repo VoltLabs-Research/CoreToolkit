@@ -31,6 +31,13 @@ public:
     PropertyBase(const PropertyBase& other);
     ~PropertyBase();
 
+    void bindExternalData(void* data,
+                          std::size_t count,
+                          DataType dataType,
+                          std::size_t componentCount,
+                          std::size_t stride,
+                          std::shared_ptr<void> owner = nullptr);
+
     [[nodiscard]] std::size_t size() const noexcept{
         return _numElements;
     }
@@ -72,7 +79,7 @@ public:
     }
 
     [[nodiscard]] const void* constData() const noexcept{
-        return _data.get();
+        return _data ? _data.get() : _externalData;
     }
 
     [[nodiscard]] const int* constDataInt() const noexcept{
@@ -96,7 +103,7 @@ public:
     }
 
     void* data() noexcept{
-        return _data.get();
+        return _data ? _data.get() : _externalData;
     }
 
     int* dataInt() noexcept{
@@ -203,6 +210,8 @@ protected:
     std::size_t _stride = 0;
     std::size_t _componentCount = 0;
     std::unique_ptr<std::uint8_t[]> _data;
+    void* _externalData = nullptr;
+    std::shared_ptr<void> _externalOwner;
 };
 
 }

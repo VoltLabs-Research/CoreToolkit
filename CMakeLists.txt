@@ -38,7 +38,6 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release MinSizeRel Re
 
 # External packages
 find_package(Threads REQUIRED)
-find_package(OpenMP REQUIRED)
 find_package(TBB REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
@@ -81,7 +80,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME} PUBLIC
 	Threads::Threads
 	TBB::tbb
-	OpenMP::OpenMP_CXX
 	spdlog::spdlog
 	fmt::fmt
 	nlohmann_json::nlohmann_json
@@ -92,6 +90,14 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 
 # Install main library and embedded libs
 install(TARGETS ${PROJECT_NAME} ptm mwm_csp geogram DESTINATION lib)
+
+# HPC optimization flags for Release builds (propagate to all consumers via PUBLIC)
+target_compile_options(${PROJECT_NAME} PUBLIC
+	$<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:
+		-O3 -march=native -fno-math-errno -fno-trapping-math -ffp-contract=fast
+	>
+)
+# Keep strict IEEE on geometry-critical code — NOT using -ffast-math globally
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
 
 # Install embedded dependency headers (directly to include/ for flat includes like <ptm_functions.h>)

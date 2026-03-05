@@ -40,7 +40,6 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release MinSizeRel Re
 find_package(Threads REQUIRED)
 find_package(TBB REQUIRED)
 find_package(spdlog REQUIRED)
-find_package(fmt REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 # PTM library
@@ -81,7 +80,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	Threads::Threads
 	TBB::tbb
 	spdlog::spdlog
-	fmt::fmt
 	nlohmann_json::nlohmann_json
 	ptm
 	mwm_csp

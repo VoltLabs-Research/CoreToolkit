@@ -11,7 +11,6 @@ class CoreToolkitConan(ConanFile):
     requires = (
         "onetbb/2021.12.0",
         "spdlog/1.14.1",
-        "fmt/10.2.1",
         "nlohmann_json/3.11.3",
     )
     exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*"
@@ -38,6 +37,5 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.requires = [
             "onetbb::onetbb",
             "spdlog::spdlog",
-            "fmt::fmt",
             "nlohmann_json::nlohmann_json",
         ]

@@ -10,10 +10,15 @@ SUPPORTED_CONAN_VERSION="2.0.0"
 APT_UPDATED=0
 BUILD_OUTPUT_DIR="${BUILD_OUTPUT_DIR:-${2:-${SCRIPT_DIR}/out}}"
 
-PACKAGES=(
+TOOLS_PACKAGES=(
     CoreToolkit
+    VoltSDK
+    SpatialAssembler
+    HeadlessRasterizer
+    LammpsIO
+)
 
-    # Plugins
+PLUGIN_PACKAGES=(
     StructureIdentification
     AtomicStrain
     CentroSymmetryParameter
@@ -23,16 +28,17 @@ PACKAGES=(
     ElasticStrain
     GrainSegmentation
     OpenDXA
-    
-    # App-related
-    SpatialAssembler
-    HeadlessRasterizer
-    LammpsIO
+)
 
-    # Volt
+APP_PACKAGES=(
     Volt
     ClusterDaemon
-    VoltSDK
+)
+
+PACKAGES=(
+    "${TOOLS_PACKAGES[@]}"
+    "${PLUGIN_PACKAGES[@]}"
+    "${APP_PACKAGES[@]}"
 )
 
 log() {
@@ -186,24 +192,53 @@ ensure_docker() {
     has_command docker || die 'docker is required to build the algorithms'
 }
 
+repo_subdir() {
+    local repo="$1"
+
+    case "$repo" in
+        CoreToolkit|VoltSDK|SpatialAssembler|HeadlessRasterizer|LammpsIO)
+            printf 'tools\n'
+            ;;
+        StructureIdentification|AtomicStrain|CentroSymmetryParameter|ClusterAnalysis|CoordinationAnalysis|DisplacementsAnalysis|ElasticStrain|GrainSegmentation|OpenDXA)
+            printf 'plugins\n'
+            ;;
+        Volt|ClusterDaemon)
+            printf 'app\n'
+            ;;
+        *)
+            die "unknown repository category for '$repo'"
+            ;;
+    esac
+}
+
+repo_relative_path() {
+    local repo="$1"
+
+    printf '%s/%s\n' "$(repo_subdir "$repo")" "$repo"
+}
+
 clone_repositories() {
     local repo
+    local repo_path
 
-    mkdir -p "$WORK_DIR"
+    mkdir -p "$WORK_DIR/tools" "$WORK_DIR/plugins" "$WORK_DIR/app"
     log 'cloning repositories'
 
     for repo in "${PACKAGES[@]}"; do
-        if [[ -d "$WORK_DIR/$repo" ]]; then
+        repo_path="${WORK_DIR}/$(repo_relative_path "$repo")"
+
+        if [[ -d "$repo_path" ]]; then
             log "$repo already exists, skipping clone"
         else
-            git clone --depth 1 "$GITHUB_ORG/$repo.git" "$WORK_DIR/$repo"
+            git clone --depth 1 "$GITHUB_ORG/$repo.git" "$repo_path"
         fi
     done
 }
 
 build_packages() {
     local build_extra_args=()
-    local dockerfile_path="${WORK_DIR}/CoreToolkit/Dockerfile.build"
+    local dockerfile_path="${WORK_DIR}/tools/CoreToolkit/Dockerfile.build"
+    local algorithm_path
 
     # Check for --no-cache anywhere in args
     for arg in "$@"; do
@@ -220,10 +255,11 @@ build_packages() {
     log 'building packages'
     for pkg in "${PACKAGES[@]}"; do
         log "$pkg"
+        algorithm_path="$(repo_relative_path "$pkg")"
 
         DOCKER_BUILDKIT=1 docker build \
             -f "$dockerfile_path" \
-            --build-arg "ALGORITHM=${pkg}" \
+            --build-arg "ALGORITHM_PATH=${algorithm_path}" \
             --output "type=local,dest=${BUILD_OUTPUT_DIR}" \
             "${build_extra_args[@]}" \
             "${WORK_DIR}"

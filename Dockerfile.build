@@ -29,8 +29,8 @@ RUN conan profile detect --force \
 
 WORKDIR /src
 
-COPY CoreToolkit /src/CoreToolkit
-COPY StructureIdentification /src/StructureIdentification
+COPY tools/CoreToolkit /src/CoreToolkit
+COPY plugins/StructureIdentification /src/StructureIdentification
 
 RUN conan export CoreToolkit \
     && conan export StructureIdentification
@@ -39,8 +39,8 @@ RUN conan install --requires="coretoolkit/1.0.0" \
         -o "hwloc/*:shared=True" \
         --build=missing
 
-ARG ALGORITHM=OpenDXA
-COPY ${ALGORITHM} /src/algorithm
+ARG ALGORITHM_PATH=plugins/OpenDXA
+COPY ${ALGORITHM_PATH} /src/algorithm
 
 WORKDIR /src/algorithm
 

@@ -65,8 +65,8 @@ jobs:
       - name: Seed CoreToolkit sources into work directory
         shell: bash
         run: |
-          mkdir -p "$WORK_DIR/tools/CoreToolkit"
-          git archive --format=tar HEAD | tar -xf - -C "$WORK_DIR/tools/CoreToolkit"
+          mkdir -p "$WORK_DIR/voltlabs-ecosystem/tools/CoreToolkit"
+          git archive --format=tar HEAD | tar -xf - -C "$WORK_DIR/voltlabs-ecosystem/tools/CoreToolkit"
 
       - name: Clone repositories and build algorithms
         shell: bash

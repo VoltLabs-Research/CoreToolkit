@@ -13,3 +13,18 @@ When `scripts/install.sh` clones the required repositories, `WORK_DIR` points di
 - `app/`: `Volt`, `ClusterDaemon`
 
 The installer clones all of those repositories, but the current Docker-based build step compiles the algorithm/plugin repositories only.
+
+## GitHub Actions plugin binaries
+
+CoreToolkit now exposes a reusable workflow at `.github/workflows/build-plugin-binary.yml`.
+
+Each plugin repository can call that workflow from its own `.github/workflows/publish-plugin-binary.yml` file to:
+
+- build the plugin against a fresh CoreToolkit checkout,
+- package the installed binary bundle, and
+- publish the bundle to GHCR as an OCI artifact.
+
+Package naming follows this pattern:
+
+- `ghcr.io/voltlabs-research/<plugin-repo-lowercase>-binary:sha-<commit>-<os>-<arch>`
+- `ghcr.io/voltlabs-research/<plugin-repo-lowercase>-binary:<tag>-<os>-<arch>` for tag builds

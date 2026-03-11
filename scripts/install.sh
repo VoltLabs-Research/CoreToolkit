@@ -45,6 +45,10 @@ PACKAGES=(
     "${APP_PACKAGES[@]}"
 )
 
+BUILD_PACKAGES=(
+    "${PLUGIN_PACKAGES[@]}"
+)
+
 log() {
     printf '[install] %s\n' "$*"
 }
@@ -256,8 +260,8 @@ build_packages() {
 
     local pkg
 
-    log 'building packages'
-    for pkg in "${PACKAGES[@]}"; do
+    log 'building algorithm packages'
+    for pkg in "${BUILD_PACKAGES[@]}"; do
         log "$pkg"
         algorithm_path="$(repo_relative_path "$pkg")"
 

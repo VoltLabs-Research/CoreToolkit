@@ -4,10 +4,6 @@
 
 namespace Volt {
 
-// ============================================================================
-// MsgpackWriter implementation
-// ============================================================================
-
 void MsgpackWriter::write_raw(const void* data, size_t size) {
     _os.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
 }
@@ -160,10 +156,6 @@ void MsgpackWriter::write_map_header(uint32_t size) {
         write_u32(size);
     }
 }
-
-// ============================================================================
-// JsonUtils implementation
-// ============================================================================
 
 void JsonUtils::writeJsonAsMsgpack(MsgpackWriter& writer, const json& data, bool sortKeys) {
     if (data.is_discarded() || data.is_null()) {

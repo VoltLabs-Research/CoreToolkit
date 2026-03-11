@@ -1,0 +1,67 @@
+FROM gcc:14-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake \
+        python3-pip \
+        python3-venv \
+        pkg-config \
+        libboost-dev \
+        libtbb-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --break-system-packages conan
+
+RUN conan profile detect --force \
+    && PROFILE_PATH="$(conan profile path default)" \
+    && printf '%s\n' \
+        '[settings]'                        \
+        'arch=x86_64'                       \
+        'build_type=Release'                \
+        'compiler=gcc'                      \
+        'compiler.cppstd=gnu23'             \
+        'compiler.libcxx=libstdc++11'       \
+        'compiler.version=14'               \
+        'os=Linux'                          \
+        ''                                  \
+        '[conf]'                            \
+        'tools.build:exelinkflags=["-static-libstdc++", "-static-libgcc"]' \
+    > "$PROFILE_PATH"
+
+WORKDIR /src
+
+COPY CoreToolkit /src/CoreToolkit
+COPY StructureIdentification /src/StructureIdentification
+
+RUN conan export CoreToolkit \
+    && conan export StructureIdentification
+
+RUN conan install --requires="coretoolkit/1.0.0" \
+        -o "hwloc/*:shared=True" \
+        --build=missing
+
+ARG ALGORITHM=OpenDXA
+COPY ${ALGORITHM} /src/algorithm
+
+WORKDIR /src/algorithm
+
+# Remove stale local build artifacts (CMakeCache.txt with host paths, etc.)
+RUN rm -rf build/
+
+RUN conan install . \
+        -o "hwloc/*:shared=True" \
+        --build=missing \
+        --output-folder=build
+
+RUN cmake -S . -B build/build/Release \
+        -DCMAKE_TOOLCHAIN_FILE=build/build/Release/generators/conan_toolchain.cmake \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+        -DCMAKE_SKIP_RPATH=ON \
+    && cmake --build build/build/Release -j"$(nproc)"
+
+RUN mkdir -p /out \
+    && find build/build/Release -maxdepth 1 -type f -executable \
+        -exec cp {} /out/ \;
+
+FROM scratch AS export
+COPY --from=builder /out/ /

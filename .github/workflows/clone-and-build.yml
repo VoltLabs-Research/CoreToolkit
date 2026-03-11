@@ -1,0 +1,89 @@
+name: Clone and Build Algorithms
+
+on:
+  workflow_dispatch:
+    inputs:
+      work_dir:
+        description: Directory inside GITHUB_WORKSPACE where repositories will be cloned
+        required: false
+        default: voltlabs
+        type: string
+      output_dir:
+        description: Directory inside GITHUB_WORKSPACE where build artifacts will be exported
+        required: false
+        default: artifacts
+        type: string
+      github_org:
+        description: Base GitHub URL/organization used for cloning repositories
+        required: false
+        default: https://github.com/voltlabs-research
+        type: string
+      no_cache:
+        description: Disable Docker build cache
+        required: false
+        default: false
+        type: boolean
+  workflow_call:
+    inputs:
+      work_dir:
+        description: Directory inside GITHUB_WORKSPACE where repositories will be cloned
+        required: false
+        default: voltlabs
+        type: string
+      output_dir:
+        description: Directory inside GITHUB_WORKSPACE where build artifacts will be exported
+        required: false
+        default: artifacts
+        type: string
+      github_org:
+        description: Base GitHub URL/organization used for cloning repositories
+        required: false
+        default: https://github.com/voltlabs-research
+        type: string
+      no_cache:
+        description: Disable Docker build cache
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      WORK_DIR: ${{ github.workspace }}/${{ inputs.work_dir }}
+      OUTPUT_DIR: ${{ github.workspace }}/${{ inputs.output_dir }}
+      GITHUB_ORG: ${{ inputs.github_org }}
+      NO_CACHE: ${{ inputs.no_cache }}
+    steps:
+      - name: Check out CoreToolkit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Seed CoreToolkit sources into work directory
+        shell: bash
+        run: |
+          mkdir -p "$WORK_DIR/CoreToolkit"
+          git archive --format=tar HEAD | tar -xf - -C "$WORK_DIR/CoreToolkit"
+
+      - name: Clone repositories and build algorithms
+        shell: bash
+        run: |
+          args=()
+          if [[ "$NO_CACHE" == "true" ]]; then
+            args+=(--no-cache)
+          fi
+
+          WORK_DIR="$WORK_DIR" \
+          GITHUB_ORG="$GITHUB_ORG" \
+          BUILD_OUTPUT_DIR="$OUTPUT_DIR" \
+          bash scripts/install.sh "${args[@]}"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-algorithms
+          path: ${{ env.OUTPUT_DIR }}
+          if-no-files-found: error

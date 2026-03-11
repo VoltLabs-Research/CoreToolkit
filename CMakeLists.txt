@@ -48,6 +48,10 @@ if(TARGET Boost::headers)
 	set(VOLT_BOOST_TARGET Boost::headers)
 elseif(TARGET Boost::boost)
 	set(VOLT_BOOST_TARGET Boost::boost)
+elseif(TARGET boost::headers)
+	set(VOLT_BOOST_TARGET boost::headers)
+elseif(TARGET boost::boost)
+	set(VOLT_BOOST_TARGET boost::boost)
 endif()
 
 # PTM library

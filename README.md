@@ -6,7 +6,7 @@ curl -sSL https://raw.githubusercontent.com/voltlabs-research/CoreToolkit/main/s
 
 ## Repository layout
 
-When `scripts/install.sh` clones the required repositories, it places them under the selected working directory using this structure:
+When `scripts/install.sh` clones the required repositories, it places them under `${WORK_DIR}/voltlabs-ecosystem` using this structure:
 
 - `tools/`: `CoreToolkit`, `VoltSDK`, `SpatialAssembler`, `HeadlessRasterizer`, `LammpsIO`
 - `plugins/`: `StructureIdentification`, `AtomicStrain`, `CentroSymmetryParameter`, `ClusterAnalysis`, `CoordinationAnalysis`, `DisplacementsAnalysis`, `ElasticStrain`, `GrainSegmentation`, `OpenDXA`

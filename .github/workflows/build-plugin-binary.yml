@@ -87,7 +87,15 @@ jobs:
           fi
 
           conan export "$coretoolkit_dir"
-          conan install "$plugin_dir" --build=missing -s build_type=Release --output-folder "$plugin_dir/build"
+          conan install --requires="coretoolkit/1.0.0" \
+            -o "hwloc/*:shared=True" \
+            --build=missing \
+            -s build_type=Release
+          conan install "$plugin_dir" \
+            -o "hwloc/*:shared=True" \
+            --build=missing \
+            -s build_type=Release \
+            --output-folder "$plugin_dir/build"
 
           toolchain_path="$(find "$plugin_dir/build" -path '*/generators/conan_toolchain.cmake' | head -n 1)"
           if [[ -z "$toolchain_path" ]]; then

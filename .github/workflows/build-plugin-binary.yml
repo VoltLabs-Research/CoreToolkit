@@ -1,0 +1,196 @@
+name: Build Plugin Binary
+
+on:
+  workflow_call:
+    inputs:
+      plugin_name:
+        description: Plugin repository name.
+        required: true
+        type: string
+      coretoolkit_ref:
+        description: CoreToolkit ref used for the reusable workflow checkout.
+        required: false
+        default: main
+        type: string
+
+jobs:
+  build-and-publish:
+    name: Publish ${{ inputs.plugin_name }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Check out plugin repository
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Check out CoreToolkit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/CoreToolkit
+          ref: ${{ inputs.coretoolkit_ref }}
+          path: coretoolkit
+
+      - name: Set up MSVC developer shell
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Install Conan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip conan
+          conan profile detect --force
+
+      - name: Build install bundle
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root_dir="$PWD"
+          plugin_dir="$root_dir/plugin"
+          coretoolkit_dir="$root_dir/coretoolkit"
+          output_dir="$root_dir/.ci-output"
+          install_dir="$output_dir/install"
+          archive_dir="$output_dir/archive"
+          mkdir -p "$install_dir" "$archive_dir"
+
+          plugin_repo='${{ inputs.plugin_name }}'
+          owner_lc="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          package_name="$(printf '%s' "$plugin_repo" | tr '[:upper:]' '[:lower:]')-binary"
+          os_slug="$(printf '%s' '${{ runner.os }}' | tr '[:upper:]' '[:lower:]')"
+          arch_slug="$(printf '%s' '${{ runner.arch }}' | tr '[:upper:]' '[:lower:]')"
+          ref_slug="$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#-#g')"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
+          immutable_ref="ghcr.io/${owner_lc}/${package_name}:sha-${short_sha}-${os_slug}-${arch_slug}"
+          release_ref=''
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            release_ref="ghcr.io/${owner_lc}/${package_name}:${ref_slug}-${os_slug}-${arch_slug}"
+          fi
+
+          conan export "$coretoolkit_dir"
+          conan install "$plugin_dir" --build=missing -s build_type=Release --output-folder "$plugin_dir/build"
+
+          toolchain_path="$(find "$plugin_dir/build" -path '*/generators/conan_toolchain.cmake' | head -n 1)"
+          if [[ -z "$toolchain_path" ]]; then
+            echo 'Unable to locate conan_toolchain.cmake' >&2
+            exit 1
+          fi
+          build_dir="$(cd "$(dirname "$toolchain_path")/.." && pwd)"
+
+          cmake_args=(
+            -S "$plugin_dir"
+            -B "$build_dir"
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain_path"
+            -DCMAKE_BUILD_TYPE=Release
+            "-DCMAKE_INSTALL_PREFIX=$install_dir"
+          )
+          if [[ '${{ runner.os }}' == 'Linux' ]]; then
+            cmake_args+=("-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc")
+          fi
+
+          cmake "${cmake_args[@]}"
+          cmake --build "$build_dir" --config Release --parallel
+          cmake --install "$build_dir" --config Release
+
+          archive_path="$archive_dir/${package_name}-${os_slug}-${arch_slug}.tar.gz"
+          metadata_path="$archive_dir/metadata.json"
+          checksum_path="$archive_path.sha256"
+
+          export INSTALL_DIR="$install_dir"
+          export ARCHIVE_PATH="$archive_path"
+          export METADATA_PATH="$metadata_path"
+          export CHECKSUM_PATH="$checksum_path"
+          export PLUGIN_REPO="$plugin_repo"
+          export PACKAGE_NAME="$package_name"
+          export OS_SLUG="$os_slug"
+          export ARCH_SLUG="$arch_slug"
+          export GITHUB_SOURCE_REPO="$GITHUB_REPOSITORY"
+          export GITHUB_SOURCE_REF="$GITHUB_REF_NAME"
+          export GITHUB_SOURCE_SHA="$GITHUB_SHA"
+
+          python - <<'PYCODE'
+          import hashlib
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          install_dir = Path(os.environ['INSTALL_DIR'])
+          archive_path = Path(os.environ['ARCHIVE_PATH'])
+          metadata_path = Path(os.environ['METADATA_PATH'])
+          checksum_path = Path(os.environ['CHECKSUM_PATH'])
+
+          metadata = {
+              'plugin_repository': os.environ['PLUGIN_REPO'],
+              'package_name': os.environ['PACKAGE_NAME'],
+              'os': os.environ['OS_SLUG'],
+              'arch': os.environ['ARCH_SLUG'],
+              'source_repository': os.environ['GITHUB_SOURCE_REPO'],
+              'source_ref': os.environ['GITHUB_SOURCE_REF'],
+              'source_sha': os.environ['GITHUB_SOURCE_SHA'],
+          }
+          metadata_path.write_text(json.dumps(metadata, indent=2) + '\\n', encoding='utf-8')
+
+          with tarfile.open(archive_path, 'w:gz') as tar:
+              tar.add(install_dir, arcname=os.environ['PLUGIN_REPO'])
+              tar.add(metadata_path, arcname=f"{os.environ['PLUGIN_REPO']}/metadata.json")
+
+          digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+          checksum_path.write_text(f"{digest}  {archive_path.name}\\n", encoding='utf-8')
+          PYCODE
+
+          echo "immutable_ref=$immutable_ref" >> "$GITHUB_OUTPUT"
+          echo "release_ref=$release_ref" >> "$GITHUB_OUTPUT"
+          echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
+          echo "metadata_path=$metadata_path" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$checksum_path" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | oras login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Publish bundle to GHCR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          refs=('${{ steps.build.outputs.immutable_ref }}')
+          if [[ -n '${{ steps.build.outputs.release_ref }}' ]]; then
+            refs+=('${{ steps.build.outputs.release_ref }}')
+          fi
+
+          for ref in "${refs[@]}"; do
+            oras push "$ref" \
+              --artifact-type application/vnd.voltlabs.plugin.binary.v1 \
+              --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
+              --annotation "org.opencontainers.image.title=${{ inputs.plugin_name }} binary bundle" \
+              --annotation "org.opencontainers.image.version=${{ github.ref_name }}" \
+              "${{ steps.build.outputs.archive_path }}:application/vnd.voltlabs.plugin.binary.layer.v1.tar+gzip" \
+              "${{ steps.build.outputs.checksum_path }}:text/plain" \
+              "${{ steps.build.outputs.metadata_path }}:application/json"
+          done

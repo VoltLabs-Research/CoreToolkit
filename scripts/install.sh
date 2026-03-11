@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ORG="${GITHUB_ORG:-https://github.com/voltlabs-research}"
 WORK_DIR="${WORK_DIR:-./voltlabs}"
 CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True")
 SUPPORTED_CMAKE_VERSION="3.20.0"
 SUPPORTED_CONAN_VERSION="2.0.0"
 APT_UPDATED=0
+BUILD_OUTPUT_DIR="${BUILD_OUTPUT_DIR:-${2:-${SCRIPT_DIR}/out}}"
 
 PACKAGES=(
     CoreToolkit
+
+    # Plugins
     StructureIdentification
     AtomicStrain
     CentroSymmetryParameter
@@ -19,6 +23,16 @@ PACKAGES=(
     ElasticStrain
     GrainSegmentation
     OpenDXA
+    
+    # App-related
+    SpatialAssembler
+    HeadlessRasterizer
+    LammpsIO
+
+    # Volt
+    Volt
+    ClusterDaemon
+    VoltSDK
 )
 
 log() {
@@ -168,6 +182,10 @@ ensure_conan() {
     log "Conan $conan_version detected"
 }
 
+ensure_docker() {
+    has_command docker || die 'docker is required to build the algorithms'
+}
+
 clone_repositories() {
     local repo
 
@@ -184,12 +202,31 @@ clone_repositories() {
 }
 
 build_packages() {
+    local build_extra_args=()
+    local dockerfile_path="${WORK_DIR}/CoreToolkit/Dockerfile.build"
+
+    # Check for --no-cache anywhere in args
+    for arg in "$@"; do
+        if [[ "$arg" == "--no-cache" ]]; then
+            build_extra_args+=(--no-cache)
+        fi
+    done
+
+    mkdir -p "${BUILD_OUTPUT_DIR}"
+    [[ -f "$dockerfile_path" ]] || die "Dockerfile not found at $dockerfile_path"
+
     local pkg
 
     log 'building packages'
     for pkg in "${PACKAGES[@]}"; do
         log "$pkg"
-        conan create "$WORK_DIR/$pkg" "${CONAN_OPTS[@]}"
+
+        DOCKER_BUILDKIT=1 docker build \
+            -f "$dockerfile_path" \
+            --build-arg "ALGORITHM=${pkg}" \
+            --output "type=local,dest=${BUILD_OUTPUT_DIR}" \
+            "${build_extra_args[@]}" \
+            "${WORK_DIR}"
     done
 }
 
@@ -200,6 +237,7 @@ main() {
     ensure_cmake
     ensure_cxx23_compiler
     ensure_conan
+    ensure_docker
     clone_repositories
     build_packages
     log 'done'

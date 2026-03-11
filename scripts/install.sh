@@ -3,8 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GITHUB_ORG="${GITHUB_ORG:-https://github.com/voltlabs-research}"
-WORK_DIR="${WORK_DIR:-./voltlabs}"
-ECOSYSTEM_DIR_NAME="voltlabs-ecosystem"
+WORK_DIR="${WORK_DIR:-./voltlabs-ecosystem}"
 CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True")
 SUPPORTED_CMAKE_VERSION="3.20.0"
 SUPPORTED_CONAN_VERSION="2.0.0"
@@ -221,13 +220,12 @@ repo_relative_path() {
 clone_repositories() {
     local repo
     local repo_path
-    local ecosystem_dir="${WORK_DIR}/${ECOSYSTEM_DIR_NAME}"
 
-    mkdir -p "$ecosystem_dir/tools" "$ecosystem_dir/plugins" "$ecosystem_dir/app"
+    mkdir -p "$WORK_DIR/tools" "$WORK_DIR/plugins" "$WORK_DIR/app"
     log 'cloning repositories'
 
     for repo in "${PACKAGES[@]}"; do
-        repo_path="${ecosystem_dir}/$(repo_relative_path "$repo")"
+        repo_path="${WORK_DIR}/$(repo_relative_path "$repo")"
 
         if [[ -d "$repo_path" ]]; then
             log "$repo already exists, skipping clone"
@@ -239,8 +237,7 @@ clone_repositories() {
 
 build_packages() {
     local build_extra_args=()
-    local ecosystem_dir="${WORK_DIR}/${ECOSYSTEM_DIR_NAME}"
-    local dockerfile_path="${ecosystem_dir}/tools/CoreToolkit/Dockerfile.build"
+    local dockerfile_path="${WORK_DIR}/tools/CoreToolkit/Dockerfile.build"
     local algorithm_path
 
     # Check for --no-cache anywhere in args
@@ -258,7 +255,7 @@ build_packages() {
     log 'building packages'
     for pkg in "${PACKAGES[@]}"; do
         log "$pkg"
-        algorithm_path="${ECOSYSTEM_DIR_NAME}/$(repo_relative_path "$pkg")"
+        algorithm_path="$(repo_relative_path "$pkg")"
 
         DOCKER_BUILDKIT=1 docker build \
             -f "$dockerfile_path" \

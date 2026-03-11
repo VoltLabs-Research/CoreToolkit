@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${BASH_SOURCE[0]-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="$(pwd)"
+fi
 GITHUB_ORG="${GITHUB_ORG:-https://github.com/voltlabs-research}"
 WORK_DIR="${WORK_DIR:-./voltlabs-ecosystem}"
 CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True")

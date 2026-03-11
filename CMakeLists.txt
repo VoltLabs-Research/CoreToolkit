@@ -41,6 +41,14 @@ find_package(Threads REQUIRED)
 find_package(TBB REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(Boost REQUIRED)
+
+set(VOLT_BOOST_TARGET "")
+if(TARGET Boost::headers)
+	set(VOLT_BOOST_TARGET Boost::headers)
+elseif(TARGET Boost::boost)
+	set(VOLT_BOOST_TARGET Boost::boost)
+endif()
 
 # PTM library
 file(GLOB PTM_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/ptm/*.cpp)
@@ -57,8 +65,14 @@ set_target_properties(mwm_csp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Geogram (Delaunay tessellation)
 set(GEOGRAM_SOURCES ${CMAKE_SOURCE_DIR}/dependencies/geogram/Delaunay_psm.cpp)
 add_library(geogram STATIC ${GEOGRAM_SOURCES})
-target_include_directories(geogram PUBLIC ${CMAKE_SOURCE_DIR}/dependencies/geogram)
+target_include_directories(geogram PUBLIC
+	${CMAKE_SOURCE_DIR}/dependencies/geogram
+	${Boost_INCLUDE_DIRS}
+)
 set_target_properties(geogram PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(VOLT_BOOST_TARGET)
+	target_link_libraries(geogram PUBLIC ${VOLT_BOOST_TARGET})
+endif()
 
 file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 
@@ -69,7 +83,7 @@ target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
 target_include_directories(${PROJECT_NAME} PUBLIC
 	${CMAKE_SOURCE_DIR}/include
 	${CMAKE_SOURCE_DIR}/dependencies
-	${CMAKE_SOURCE_DIR}/dependencies/boost
+	${Boost_INCLUDE_DIRS}
 	${CMAKE_SOURCE_DIR}/dependencies/fast_float
 	${CMAKE_SOURCE_DIR}/dependencies/ptm
 	${CMAKE_SOURCE_DIR}/dependencies/mwm_csp
@@ -81,6 +95,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	TBB::tbb
 	spdlog::spdlog
 	nlohmann_json::nlohmann_json
+	${VOLT_BOOST_TARGET}
 	ptm
 	mwm_csp
 	geogram
@@ -102,10 +117,4 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/ptm/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/geogram/ DESTINATION include FILES_MATCHING PATTERN "*.h")
-if(EXISTS ${CMAKE_SOURCE_DIR}/dependencies/boost AND IS_DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/boost)
-	file(GLOB BOOST_FILES ${CMAKE_SOURCE_DIR}/dependencies/boost/*)
-	if(BOOST_FILES)
-		install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/boost/ DESTINATION include/boost)
-	endif()
-endif()
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/fast_float/ DESTINATION include FILES_MATCHING PATTERN "*.h")

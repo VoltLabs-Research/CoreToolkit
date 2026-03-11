@@ -9,6 +9,7 @@ class CoreToolkitConan(ConanFile):
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
     requires = (
+        "boost/1.88.0",
         "onetbb/2021.12.0",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
@@ -35,6 +36,7 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.set_property("cmake_target_name", "coretoolkit::coretoolkit")
         self.cpp_info.libs = ["coretoolkit", "ptm", "mwm_csp", "geogram"]
         self.cpp_info.requires = [
+            "boost::headers",
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",

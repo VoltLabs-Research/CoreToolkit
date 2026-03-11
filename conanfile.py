@@ -36,7 +36,7 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.set_property("cmake_target_name", "coretoolkit::coretoolkit")
         self.cpp_info.libs = ["coretoolkit", "ptm", "mwm_csp", "geogram"]
         self.cpp_info.requires = [
-            "boost::boost",
+            "boost::headers",
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",

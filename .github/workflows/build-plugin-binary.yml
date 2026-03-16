@@ -12,6 +12,11 @@ on:
         required: false
         default: main
         type: string
+      dependency_repos:
+        description: Newline-separated plugin repositories that must be exported to Conan before building.
+        required: false
+        default: ''
+        type: string
 
 jobs:
   build-and-publish:
@@ -87,6 +92,20 @@ jobs:
           fi
 
           conan export "$coretoolkit_dir"
+
+          if [[ -n '${{ inputs.dependency_repos }}' ]]; then
+            while IFS= read -r dependency_repo; do
+              dependency_repo="$(printf '%s' "$dependency_repo" | xargs)"
+              [[ -z "$dependency_repo" ]] && continue
+
+              dependency_dir="$root_dir/$(basename "$dependency_repo")"
+              git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY_OWNER}/${dependency_repo}" "$dependency_dir"
+              conan export "$dependency_dir"
+            done <<'EOF'
+          ${{ inputs.dependency_repos }}
+          EOF
+          fi
+
           conan install --requires="coretoolkit/1.0.0" \
             -o "hwloc/*:shared=True" \
             --build=missing \

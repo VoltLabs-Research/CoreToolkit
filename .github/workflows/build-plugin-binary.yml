@@ -141,6 +141,9 @@ jobs:
           archive_path="$archive_dir/${package_name}-${os_slug}-${arch_slug}.tar.gz"
           metadata_path="$archive_dir/metadata.json"
           checksum_path="$archive_path.sha256"
+          archive_relative_path=".ci-output/archive/${package_name}-${os_slug}-${arch_slug}.tar.gz"
+          metadata_relative_path=".ci-output/archive/metadata.json"
+          checksum_relative_path="$archive_relative_path.sha256"
 
           export INSTALL_DIR="$install_dir"
           export ARCHIVE_PATH="$archive_path"
@@ -187,9 +190,9 @@ jobs:
 
           echo "immutable_ref=$immutable_ref" >> "$GITHUB_OUTPUT"
           echo "release_ref=$release_ref" >> "$GITHUB_OUTPUT"
-          echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
-          echo "metadata_path=$metadata_path" >> "$GITHUB_OUTPUT"
-          echo "checksum_path=$checksum_path" >> "$GITHUB_OUTPUT"
+          echo "archive_path=$archive_relative_path" >> "$GITHUB_OUTPUT"
+          echo "metadata_path=$metadata_relative_path" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$checksum_relative_path" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         shell: bash

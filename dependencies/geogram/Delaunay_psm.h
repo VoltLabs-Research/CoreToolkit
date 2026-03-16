@@ -1866,6 +1866,10 @@ inline void geo_pause() {
 
 #include <vector>
 
+#ifdef GEO_OS_WINDOWS
+#include <errno.h>
+#endif
+
 #ifdef GEO_OS_APPLE
 # define GEO_USE_DEFAULT_SPINLOCK_ARRAY
 # include <AvailabilityMacros.h>
@@ -7853,4 +7857,3 @@ namespace GEO {
 }
 
 #endif
-

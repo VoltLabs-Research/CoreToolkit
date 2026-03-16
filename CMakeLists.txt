@@ -58,13 +58,11 @@ endif()
 file(GLOB PTM_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/ptm/*.cpp)
 add_library(ptm STATIC ${PTM_SOURCES})
 target_include_directories(ptm PUBLIC ${CMAKE_SOURCE_DIR}/dependencies/ptm)
-set_target_properties(ptm PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # MWM_CSP library (for centrosymmetry matching)
 file(GLOB MWM_CSP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/*.cpp)
 add_library(mwm_csp STATIC ${MWM_CSP_SOURCES})
 target_include_directories(mwm_csp PUBLIC ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp)
-set_target_properties(mwm_csp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Geogram (Delaunay tessellation)
 set(GEOGRAM_SOURCES ${CMAKE_SOURCE_DIR}/dependencies/geogram/Delaunay_psm.cpp)
@@ -73,7 +71,6 @@ target_include_directories(geogram PUBLIC
 	${CMAKE_SOURCE_DIR}/dependencies/geogram
 	${Boost_INCLUDE_DIRS}
 )
-set_target_properties(geogram PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(VOLT_BOOST_TARGET)
 	target_link_libraries(geogram PUBLIC ${VOLT_BOOST_TARGET})
 endif()
@@ -81,7 +78,6 @@ endif()
 file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 
 add_library(${PROJECT_NAME} STATIC ${LIBRARY_SOURCES})
-set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
 
 target_include_directories(${PROJECT_NAME} PUBLIC

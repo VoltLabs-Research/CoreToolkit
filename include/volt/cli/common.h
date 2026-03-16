@@ -13,8 +13,8 @@
 #include <cstdlib>
 #include <cctype>
 
-#include <tbb/info.h>
-#include <tbb/global_control.h>
+#include <oneapi/tbb/info.h>
+#include <oneapi/tbb/global_control.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>

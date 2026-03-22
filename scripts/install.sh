@@ -26,12 +26,15 @@ PLUGIN_PACKAGES=(
     StructureIdentification
     AtomicStrain
     CentroSymmetryParameter
+    CommonNeighborAnalysis
     ClusterAnalysis
     CoordinationAnalysis
     DisplacementsAnalysis
     ElasticStrain
     GrainSegmentation
+    LineReconstructionDXA
     OpenDXA
+    PolyhedralTemplateMatching
 )
 
 APP_PACKAGES=(
@@ -207,7 +210,7 @@ repo_subdir() {
         CoreToolkit|VoltSDK|SpatialAssembler|HeadlessRasterizer|LammpsIO)
             printf 'tools\n'
             ;;
-        StructureIdentification|AtomicStrain|CentroSymmetryParameter|ClusterAnalysis|CoordinationAnalysis|DisplacementsAnalysis|ElasticStrain|GrainSegmentation|OpenDXA)
+        StructureIdentification|AtomicStrain|CentroSymmetryParameter|CommonNeighborAnalysis|ClusterAnalysis|CoordinationAnalysis|DisplacementsAnalysis|ElasticStrain|GrainSegmentation|LineReconstructionDXA|OpenDXA|PolyhedralTemplateMatching)
             printf 'plugins\n'
             ;;
         Volt|ClusterDaemon)

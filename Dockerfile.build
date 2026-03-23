@@ -31,9 +31,13 @@ WORKDIR /src
 
 COPY tools/CoreToolkit /src/CoreToolkit
 COPY plugins/StructureIdentification /src/StructureIdentification
+COPY plugins/CommonNeighborAnalysis /src/CommonNeighborAnalysis
+COPY plugins/PolyhedralTemplateMatching /src/PolyhedralTemplateMatching
 
 RUN conan export CoreToolkit \
-    && conan export StructureIdentification
+    && conan export StructureIdentification \
+    && conan export CommonNeighborAnalysis \
+    && conan export PolyhedralTemplateMatching
 
 RUN conan install --requires="coretoolkit/1.0.0" \
         -o "hwloc/*:shared=True" \

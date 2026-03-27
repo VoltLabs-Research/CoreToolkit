@@ -1,12 +1,15 @@
 #include <volt/core/lammps_parser.h>
 #include <algorithm>
 #include <atomic>
+#include <iomanip>
 #include <cstring>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
 #include <fast_float/fast_float.h>
 
 #include <tbb/parallel_for.h>
@@ -50,6 +53,24 @@ inline bool lineStartsWith(const LineView& line, const char* prefix){
     size_t len = std::strlen(prefix);
     return (static_cast<size_t>(line.end - line.begin) >= len) &&
            (std::memcmp(line.begin, prefix, len) == 0);
+}
+
+inline std::string trimCopy(std::string_view text){
+    std::size_t begin = 0;
+    std::size_t end = text.size();
+
+    while(begin < end && (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\r')){
+        ++begin;
+    }
+    while(end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\r')){
+        --end;
+    }
+
+    return std::string(text.substr(begin, end - begin));
+}
+
+inline std::string lineToString(const LineView& line){
+    return std::string(line.begin, static_cast<std::size_t>(line.end - line.begin));
 }
 
 inline const char* skipSpaces(const char* p, const char* end){
@@ -141,7 +162,13 @@ enum class ColumnKind : unsigned char{
     Type,
     PosX,
     PosY,
-    PosZ
+    PosZ,
+    Extra
+};
+
+struct ExtraAtomColumn{
+    std::string name;
+    DataType dataType = DataType::Void;
 };
 
 struct AtomColumns{
@@ -159,7 +186,22 @@ struct AtomColumns{
     bool scaled = false;
     bool valid = false;
     std::vector<ColumnKind> kinds;
+    std::vector<int> extraIndices;
+    std::vector<ExtraAtomColumn> extras;
 };
+
+inline DataType resolveExtraColumnType(std::string_view name){
+    if(name == "correspondence"){
+        return DataType::Int64;
+    }
+    if(name == "structure_type" || name == "cluster_id" || name.ends_with("_id")){
+        return DataType::Int;
+    }
+    if(name.starts_with("orientation_")){
+        return DataType::Double;
+    }
+    return DataType::Double;
+}
 
 inline AtomColumns parseAtomColumns(const LineView& line){
     AtomColumns cols;
@@ -192,12 +234,33 @@ inline AtomColumns parseAtomColumns(const LineView& line){
     cols.posZCol = cols.scaled ? cols.zsCol : cols.zCol;
     cols.valid = (cols.posXCol >= 0 && cols.posYCol >= 0 && cols.posZCol >= 0);
     cols.kinds.assign(static_cast<size_t>(columnIndex), ColumnKind::Ignore);
+    cols.extraIndices.assign(static_cast<size_t>(columnIndex), -1);
 
     if(cols.idCol >= 0) cols.kinds[cols.idCol] = ColumnKind::Id;
     if(cols.typeCol >= 0) cols.kinds[cols.typeCol] = ColumnKind::Type;
     if(cols.posXCol >= 0) cols.kinds[cols.posXCol] = ColumnKind::PosX;
     if(cols.posYCol >= 0) cols.kinds[cols.posYCol] = ColumnKind::PosY;
     if(cols.posZCol >= 0) cols.kinds[cols.posZCol] = ColumnKind::PosZ;
+
+    tokenIndex = 0;
+    columnIndex = 0;
+    p = line.begin;
+    while(p < line.end){
+        p = skipSpaces(p, line.end);
+        if(p >= line.end) break;
+        const char* start = p;
+        p = skipToken(p, line.end);
+        if(tokenIndex >= 2){
+            const std::string_view tok(start, static_cast<size_t>(p - start));
+            if(cols.kinds[columnIndex] == ColumnKind::Ignore){
+                cols.kinds[columnIndex] = ColumnKind::Extra;
+                cols.extraIndices[columnIndex] = static_cast<int>(cols.extras.size());
+                cols.extras.push_back({std::string(tok), resolveExtraColumnType(tok)});
+            }
+            ++columnIndex;
+        }
+        ++tokenIndex;
+    }
 
     return cols;
 }
@@ -207,6 +270,107 @@ struct CellMatrix{
     double m10, m11, m12, m13;
     double m20, m21, m22, m23;
 };
+
+struct DumpBoxBounds{
+    double xloBound = 0.0;
+    double xhiBound = 0.0;
+    double yloBound = 0.0;
+    double yhiBound = 0.0;
+    double zloBound = 0.0;
+    double zhiBound = 0.0;
+    double xy = 0.0;
+    double xz = 0.0;
+    double yz = 0.0;
+    bool triclinic = false;
+};
+
+struct ExpandedExtraColumn{
+    std::string_view name;
+    const void* data = nullptr;
+    DataType dataType = DataType::Void;
+    std::size_t rowCount = 0;
+    std::size_t stride = 0;
+    std::size_t componentIndex = 0;
+};
+
+inline void initializeExtraAtomColumns(const AtomColumns& cols, LammpsParser::Frame& frame){
+    frame.atomProperties.clear();
+    for(const auto& extra : cols.extras){
+        auto& column = frame.atomProperties[extra.name];
+        column.dataType = extra.dataType;
+
+        switch(extra.dataType){
+            case DataType::Int:
+                column.ints.assign(static_cast<std::size_t>(frame.natoms), 0);
+                break;
+            case DataType::Int64:
+                column.int64s.assign(static_cast<std::size_t>(frame.natoms), 0);
+                break;
+            case DataType::Double:
+                column.doubles.assign(static_cast<std::size_t>(frame.natoms), 0.0);
+                break;
+            case DataType::Void:
+                break;
+        }
+    }
+}
+
+inline bool storeExtraAtomValue(
+    LammpsParser::Frame& frame,
+    const AtomColumns& cols,
+    int extraIndex,
+    std::size_t atomIndex,
+    const char* tokenStart,
+    const char* tokenEnd
+){
+    if(extraIndex < 0 || extraIndex >= static_cast<int>(cols.extras.size())){
+        return false;
+    }
+
+    const auto& extra = cols.extras[static_cast<std::size_t>(extraIndex)];
+    auto it = frame.atomProperties.find(extra.name);
+    if(it == frame.atomProperties.end()){
+        return false;
+    }
+
+    auto& column = it->second;
+    switch(extra.dataType){
+        case DataType::Int: {
+            int value = 0;
+            if(!parseIntToken(tokenStart, tokenEnd, value)) return false;
+            column.ints[atomIndex] = value;
+            return true;
+        }
+        case DataType::Int64: {
+            if(tokenStart >= tokenEnd) return false;
+            bool negative = false;
+            if(*tokenStart == '-'){
+                negative = true;
+                ++tokenStart;
+            }
+            std::int64_t value = 0;
+            bool any = false;
+            for(const char* p = tokenStart; p < tokenEnd; ++p){
+                const char c = *p;
+                if(c < '0' || c > '9') break;
+                value = value * 10 + static_cast<std::int64_t>(c - '0');
+                any = true;
+            }
+            if(!any) return false;
+            column.int64s[atomIndex] = negative ? -value : value;
+            return true;
+        }
+        case DataType::Double: {
+            double value = 0.0;
+            if(!parseDoubleToken(tokenStart, tokenEnd, value)) return false;
+            column.doubles[atomIndex] = value;
+            return true;
+        }
+        case DataType::Void:
+            return false;
+    }
+    return false;
+}
 
 inline const char* advanceLines(const char* p, const char* end, size_t lines, bool& ok){
     size_t count = 0;
@@ -242,6 +406,256 @@ inline int resolveThreads(){
         threads = 1;
     }
     return threads;
+}
+
+inline std::size_t dataTypeSize(DataType dataType){
+    switch(dataType){
+        case DataType::Int:
+            return sizeof(int);
+        case DataType::Double:
+            return sizeof(double);
+        case DataType::Int64:
+            return sizeof(std::int64_t);
+        case DataType::Void:
+            return 0;
+    }
+    return 0;
+}
+
+inline int resolveAtomId(const LammpsParser::Frame& frame, std::size_t index){
+    return index < frame.ids.size()
+        ? frame.ids[index]
+        : static_cast<int>(index + 1);
+}
+
+inline int resolveAtomType(const LammpsParser::Frame& frame, std::size_t index){
+    return index < frame.types.size()
+        ? frame.types[index]
+        : 1;
+}
+
+inline Point3 resolveAtomPosition(const LammpsParser::Frame& frame, std::size_t index){
+    return index < frame.positions.size()
+        ? frame.positions[index]
+        : Point3(0.0, 0.0, 0.0);
+}
+
+inline DumpBoxBounds buildDumpBoxBounds(const SimulationCell& simulationCell){
+    const auto& matrix = simulationCell.matrix();
+    const auto& a = matrix.column(0);
+    const auto& b = matrix.column(1);
+    const auto& c = matrix.column(2);
+    const auto& origin = matrix.column(3);
+
+    const double xlo = origin.x();
+    const double ylo = origin.y();
+    const double zlo = origin.z();
+    const double xhi = xlo + a.x();
+    const double yhi = ylo + b.y();
+    const double zhi = zlo + c.z();
+
+    DumpBoxBounds bounds;
+    bounds.xy = b.x();
+    bounds.xz = c.x();
+    bounds.yz = c.y();
+
+    const double dxmin = std::min({0.0, bounds.xy, bounds.xz, bounds.xy + bounds.xz});
+    const double dxmax = std::max({0.0, bounds.xy, bounds.xz, bounds.xy + bounds.xz});
+
+    bounds.xloBound = xlo + dxmin;
+    bounds.xhiBound = xhi + dxmax;
+    bounds.yloBound = ylo + std::min(0.0, bounds.yz);
+    bounds.yhiBound = yhi + std::max(0.0, bounds.yz);
+    bounds.zloBound = zlo;
+    bounds.zhiBound = zhi;
+    bounds.triclinic =
+        std::abs(bounds.xy) > EPSILON ||
+        std::abs(bounds.xz) > EPSILON ||
+        std::abs(bounds.yz) > EPSILON;
+
+    return bounds;
+}
+
+inline bool expandExtraColumns(
+    const std::vector<LammpsParser::ExtraColumn>& extraColumns,
+    const std::vector<int>& propertyAtomIds,
+    std::vector<ExpandedExtraColumn>& expandedColumns
+){
+    expandedColumns.clear();
+
+    for(const auto& column : extraColumns){
+        if(column.names.empty()){
+            std::cerr << "Error: extra dump column has no names" << std::endl;
+            return false;
+        }
+        if(column.data == nullptr){
+            std::cerr << "Error: extra dump column has null data" << std::endl;
+            return false;
+        }
+        if(column.dataType == DataType::Void){
+            std::cerr << "Error: extra dump column has invalid data type" << std::endl;
+            return false;
+        }
+        if(column.rowCount != propertyAtomIds.size()){
+            std::cerr << "Error: extra dump column row count does not match atom-id mapping" << std::endl;
+            return false;
+        }
+        if(column.componentCount == 0 || column.componentCount != column.names.size()){
+            std::cerr << "Error: extra dump column component metadata is inconsistent" << std::endl;
+            return false;
+        }
+
+        const std::size_t stride = column.stride != 0
+            ? column.stride
+            : column.componentCount * dataTypeSize(column.dataType);
+        if(stride == 0){
+            std::cerr << "Error: extra dump column stride resolved to zero" << std::endl;
+            return false;
+        }
+
+        expandedColumns.reserve(expandedColumns.size() + column.names.size());
+        for(std::size_t componentIndex = 0; componentIndex < column.names.size(); ++componentIndex){
+            expandedColumns.push_back({
+                column.names[componentIndex],
+                column.data,
+                column.dataType,
+                column.rowCount,
+                stride,
+                componentIndex
+            });
+        }
+    }
+
+    return true;
+}
+
+inline void writeDefaultExtraValue(std::ostream& out, DataType dataType){
+    switch(dataType){
+        case DataType::Double:
+            out << 0.0;
+            break;
+        case DataType::Int:
+        case DataType::Int64:
+        case DataType::Void:
+            out << 0;
+            break;
+    }
+}
+
+inline void writeExtraValue(std::ostream& out, const ExpandedExtraColumn& column, std::size_t rowIndex){
+    const auto* row = static_cast<const std::uint8_t*>(column.data) + rowIndex * column.stride;
+
+    switch(column.dataType){
+        case DataType::Int:
+            out << reinterpret_cast<const int*>(row)[column.componentIndex];
+            break;
+        case DataType::Double:
+            out << reinterpret_cast<const double*>(row)[column.componentIndex];
+            break;
+        case DataType::Int64:
+            out << static_cast<std::uint64_t>(
+                reinterpret_cast<const std::int64_t*>(row)[column.componentIndex]
+            );
+            break;
+        case DataType::Void:
+            out << 0;
+            break;
+    }
+}
+
+inline bool writeDump(
+    const std::string& filename,
+    const LammpsParser::Frame& frame,
+    const std::vector<ExpandedExtraColumn>& extraColumns,
+    const std::vector<int>* propertyRowsByAtomIndex,
+    const std::vector<LammpsParser::ExtraHeader>& extraHeaders
+){
+    if(frame.natoms < 0){
+        std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
+        return false;
+    }
+
+    const auto atomCount = static_cast<std::size_t>(frame.natoms);
+    if(propertyRowsByAtomIndex && propertyRowsByAtomIndex->size() != atomCount){
+        std::cerr << "Error: atom-property lookup table size does not match frame atom count" << std::endl;
+        return false;
+    }
+
+    std::ofstream out(filename, std::ios::binary);
+    if(!out.is_open()){
+        std::cerr << "Error: cannot open file " << filename << " for writing" << std::endl;
+        return false;
+    }
+
+    std::vector<char> buffer(1 << 20);
+    out.rdbuf()->pubsetbuf(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+
+    const auto bounds = buildDumpBoxBounds(frame.simulationCell);
+    const auto& pbc = frame.simulationCell.pbcFlags();
+
+    out << "ITEM: TIMESTEP\n" << frame.timestep << '\n'
+        << "ITEM: NUMBER OF ATOMS\n" << frame.natoms << '\n';
+
+    for(const auto& header : extraHeaders){
+        out << "ITEM: " << header.name << '\n'
+            << header.value << '\n';
+    }
+
+    out << "ITEM: BOX BOUNDS";
+
+    if(bounds.triclinic){
+        out << " xy xz yz";
+    }
+
+    out << ' '
+        << (pbc[0] ? "pp" : "ff") << ' '
+        << (pbc[1] ? "pp" : "ff") << ' '
+        << (pbc[2] ? "pp" : "ff") << '\n';
+
+    if(bounds.triclinic){
+        out << bounds.xloBound << ' ' << bounds.xhiBound << ' ' << bounds.xy << '\n'
+            << bounds.yloBound << ' ' << bounds.yhiBound << ' ' << bounds.xz << '\n'
+            << bounds.zloBound << ' ' << bounds.zhiBound << ' ' << bounds.yz << '\n';
+    }else{
+        out << bounds.xloBound << ' ' << bounds.xhiBound << '\n'
+            << bounds.yloBound << ' ' << bounds.yhiBound << '\n'
+            << bounds.zloBound << ' ' << bounds.zhiBound << '\n';
+    }
+
+    out << "ITEM: ATOMS id type x y z";
+    for(const auto& column : extraColumns){
+        out << ' ' << column.name;
+    }
+    out << '\n';
+
+    for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
+        const int atomId = resolveAtomId(frame, atomIndex);
+        const int atomType = resolveAtomType(frame, atomIndex);
+        const Point3 position = resolveAtomPosition(frame, atomIndex);
+
+        out << atomId << ' '
+            << atomType << ' '
+            << position.x() << ' '
+            << position.y() << ' '
+            << position.z();
+
+        const int propertyRow = propertyRowsByAtomIndex
+            ? (*propertyRowsByAtomIndex)[atomIndex]
+            : -1;
+
+        for(const auto& column : extraColumns){
+            out << ' ';
+            if(propertyRow < 0){
+                writeDefaultExtraValue(out, column.dataType);
+            }else{
+                writeExtraValue(out, column, static_cast<std::size_t>(propertyRow));
+            }
+        }
+        out << '\n';
+    }
+
+    return static_cast<bool>(out);
 }
 
 inline const char* parseAtomLine(
@@ -309,6 +723,11 @@ inline const char* parseAtomLine(
                 case ColumnKind::PosZ:
                     if(!parseDoubleToken(tokenStart, tokenEnd, z)) ok = false;
                     else zSet = true;
+                    break;
+                case ColumnKind::Extra:
+                    if(!storeExtraAtomValue(frame, cols, cols.extraIndices[static_cast<std::size_t>(col)], index, tokenStart, tokenEnd)){
+                        ok = false;
+                    }
                     break;
                 default:
                     break;
@@ -404,8 +823,22 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
     frame.positions.resize(frame.natoms);
     frame.types.resize(frame.natoms);
     frame.ids.resize(frame.natoms);
+    frame.headerProperties.clear();
+    frame.atomProperties.clear();
 
-    if(!readLine(cursor, end, line) || !lineStartsWith(line, "ITEM: BOX BOUNDS")) return false;
+    while(true){
+        if(!readLine(cursor, end, line)) return false;
+        if(lineStartsWith(line, "ITEM: BOX BOUNDS")) break;
+        if(!lineStartsWith(line, "ITEM: ")) return false;
+
+        const std::string key = trimCopy(std::string_view(
+            line.begin + 6,
+            static_cast<std::size_t>(line.end - (line.begin + 6))
+        ));
+        if(!readLine(cursor, end, line)) return false;
+        frame.headerProperties[key] = trimCopy(lineToString(line));
+    }
+
     bool pbcX = true, pbcY = true, pbcZ = true;
     parseBoxFlags(line, pbcX, pbcY, pbcZ);
 
@@ -440,6 +873,7 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
     if(!readLine(cursor, end, line) || !lineStartsWith(line, "ITEM: ATOMS")) return false;
     AtomColumns cols = parseAtomColumns(line);
     if(!cols.valid) return false;
+    initializeExtraAtomColumns(cols, frame);
 
     CellMatrix cell{};
     if(cols.scaled){
@@ -556,6 +990,62 @@ bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
     return parseStream(file, frame);
 }
 
+bool LammpsParser::writeFile(const std::string& filename, const Frame& frame){
+    return writeDump(filename, frame, {}, nullptr, {});
+}
+
+bool LammpsParser::writeFileWithExtraColumns(
+    const std::string& filename,
+    const Frame& frame,
+    const std::vector<int>& propertyAtomIds,
+    const std::vector<ExtraColumn>& extraColumns,
+    const std::vector<ExtraHeader>& extraHeaders
+){
+    if(frame.natoms < 0){
+        std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
+        return false;
+    }
+
+    std::vector<int> resolvedPropertyAtomIds;
+    const std::vector<int>* atomIdsForMapping = &propertyAtomIds;
+    if(!extraColumns.empty() && propertyAtomIds.empty()){
+        resolvedPropertyAtomIds.resize(static_cast<std::size_t>(frame.natoms));
+        for(std::size_t atomIndex = 0; atomIndex < resolvedPropertyAtomIds.size(); ++atomIndex){
+            resolvedPropertyAtomIds[atomIndex] = resolveAtomId(frame, atomIndex);
+        }
+        atomIdsForMapping = &resolvedPropertyAtomIds;
+    }
+
+    std::vector<ExpandedExtraColumn> expandedColumns;
+    if(!expandExtraColumns(extraColumns, *atomIdsForMapping, expandedColumns)){
+        return false;
+    }
+
+    std::unordered_map<int, int> propertyRowByAtomId;
+    propertyRowByAtomId.reserve(atomIdsForMapping->size());
+
+    for(std::size_t rowIndex = 0; rowIndex < atomIdsForMapping->size(); ++rowIndex){
+        const int atomId = (*atomIdsForMapping)[rowIndex];
+        auto [it, inserted] = propertyRowByAtomId.emplace(atomId, static_cast<int>(rowIndex));
+        if(!inserted){
+            std::cerr << "Error: duplicate atom id " << atomId
+                      << " in extra dump property mapping" << std::endl;
+            return false;
+        }
+    }
+
+    std::vector<int> propertyRowsByAtomIndex(static_cast<std::size_t>(frame.natoms), -1);
+    for(std::size_t atomIndex = 0; atomIndex < propertyRowsByAtomIndex.size(); ++atomIndex){
+        const int atomId = resolveAtomId(frame, atomIndex);
+        auto it = propertyRowByAtomId.find(atomId);
+        if(it != propertyRowByAtomId.end()){
+            propertyRowsByAtomIndex[atomIndex] = it->second;
+        }
+    }
+
+    return writeDump(filename, frame, expandedColumns, &propertyRowsByAtomIndex, extraHeaders);
+}
+
 // Parse a LAMMPS dump from any input stream.
 // Return header lines, box bounds, and atom data in sequence.
 // If any stage fails, the function aborts and returns false.
@@ -564,7 +1054,7 @@ bool LammpsParser::parseStream(std::istream &in, Frame &frame){
     if(!readBoxBounds(in, frame)) return false;
     if(!readAtomData(in, frame)) return false;
 
-    spdlog::debug("Parsed {} atoms at timestep {} ", frame.natoms, frame.timestep);
+    spdlog::info("Parsed {} atoms at timestep {} ", frame.natoms, frame.timestep);
     
     return true;
 }
@@ -593,6 +1083,8 @@ bool LammpsParser::readHeader(std::istream &in, Frame &f) {
     f.positions.clear();
     f.types.clear();
     f.ids.clear();
+    f.headerProperties.clear();
+    f.atomProperties.clear();
     f.positions.reserve(f.natoms);
     f.types.reserve(f.natoms);
     f.ids.reserve(f.natoms);
@@ -607,7 +1099,23 @@ bool LammpsParser::readHeader(std::istream &in, Frame &f) {
 // for the box matrix and sets PBC flags on the frame.
 bool LammpsParser::readBoxBounds(std::istream &in, Frame &f){
     std::string line;
-    if(!std::getline(in, line) || line.find("ITEM: BOX BOUNDS") == std::string::npos){
+    while(std::getline(in, line)){
+        if(line.find("ITEM: BOX BOUNDS") != std::string::npos){
+            break;
+        }
+
+        if(line.rfind("ITEM: ", 0) != 0){
+            return false;
+        }
+
+        std::string value;
+        if(!std::getline(in, value)){
+            return false;
+        }
+
+        f.headerProperties[trimCopy(std::string_view(line).substr(6))] = trimCopy(value);
+    }
+    if(line.find("ITEM: BOX BOUNDS") == std::string::npos){
         return false;
     }
 
@@ -680,52 +1188,44 @@ bool LammpsParser::readAtomData(std::istream &in, Frame &f){
         return false;
     }
 
-    auto cols = parseColumns(line);
-    int idCol = findColumn(cols, "id");
-    int typeCol = findColumn(cols, "type");
-    int xCol = findColumn(cols, "x");
-    int yCol = findColumn(cols, "y");
-    int zCol = findColumn(cols, "z");
-    int xsCol = findColumn(cols, "xs");
-    int ysCol = findColumn(cols, "ys");
-    int zsCol = findColumn(cols, "zs");
-    bool scaled = (xsCol >= 0 && ysCol >= 0 && zsCol >=0 );
+    LineView headerLine{
+        .begin = line.data(),
+        .end = line.data() + line.size()
+    };
+    const AtomColumns cols = parseAtomColumns(headerLine);
+    if(!cols.valid){
+        return false;
+    }
 
-    std::vector<std::string> vals;
-    vals.reserve(cols.size());
+    initializeExtraAtomColumns(cols, f);
+    f.positions.resize(f.natoms);
+    f.types.resize(f.natoms);
+    f.ids.resize(f.natoms);
 
-    for(int i=0; i<f.natoms; ++i){
+    CellMatrix cell{};
+    if(cols.scaled){
+        const auto& mat = f.simulationCell.matrix();
+        const auto& c0 = mat.column(0);
+        const auto& c1 = mat.column(1);
+        const auto& c2 = mat.column(2);
+        const auto& c3 = mat.column(3);
+        cell.m00 = c0.x(); cell.m01 = c1.x(); cell.m02 = c2.x(); cell.m03 = c3.x();
+        cell.m10 = c0.y(); cell.m11 = c1.y(); cell.m12 = c2.y(); cell.m13 = c3.y();
+        cell.m20 = c0.z(); cell.m21 = c1.z(); cell.m22 = c2.z(); cell.m23 = c3.z();
+    }
+
+    for(int i = 0; i < f.natoms; ++i){
         if(!std::getline(in, line)){
             return false;
         }
 
-        std::istringstream ss(line);
-        vals.clear();
-        std::string v;
-        
-        while(ss >> v){
-            vals.push_back(v);
+        const char* begin = line.data();
+        const char* end = begin + line.size();
+        bool ok = true;
+        parseAtomLine(begin, end, cols, cell, f, static_cast<std::size_t>(i), ok);
+        if(!ok){
+            return false;
         }
-
-        int id = idCol >= 0 ? std::stoi(vals[idCol]) : (i+1);
-        int type = typeCol >= 0 ? std::stoi(vals[typeCol]) : 1;
-        double px, py, pz;
-        
-        if(scaled){
-            Point3 frac(std::stod(vals[xsCol]),
-                        std::stod(vals[ysCol]),
-                        std::stod(vals[zsCol]));
-            Point3 cart = f.simulationCell.matrix() * frac;
-            px = cart.x(); py = cart.y(); pz = cart.z();
-        }else{
-            px = std::stod(vals[xCol]);
-            py = std::stod(vals[yCol]);
-            pz = std::stod(vals[zCol]);
-        }
-
-        f.ids.push_back(id);
-        f.types.push_back(type);
-        f.positions.emplace_back(px, py, pz);
     }
     return true;
 }

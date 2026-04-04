@@ -54,11 +54,6 @@ elseif(TARGET boost::boost)
 	set(VOLT_BOOST_TARGET boost::boost)
 endif()
 
-# PTM library
-file(GLOB PTM_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/ptm/*.cpp)
-add_library(ptm STATIC ${PTM_SOURCES})
-target_include_directories(ptm PUBLIC ${CMAKE_SOURCE_DIR}/dependencies/ptm)
-
 # MWM_CSP library (for centrosymmetry matching)
 file(GLOB MWM_CSP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/*.cpp)
 add_library(mwm_csp STATIC ${MWM_CSP_SOURCES})
@@ -85,7 +80,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 	${CMAKE_SOURCE_DIR}/dependencies
 	${Boost_INCLUDE_DIRS}
 	${CMAKE_SOURCE_DIR}/dependencies/fast_float
-	${CMAKE_SOURCE_DIR}/dependencies/ptm
 	${CMAKE_SOURCE_DIR}/dependencies/mwm_csp
 	${CMAKE_SOURCE_DIR}/dependencies/geogram
 )
@@ -96,13 +90,12 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	spdlog::spdlog
 	nlohmann_json::nlohmann_json
 	${VOLT_BOOST_TARGET}
-	ptm
 	mwm_csp
 	geogram
 )
 
 # Install main library and embedded libs
-install(TARGETS ${PROJECT_NAME} ptm mwm_csp geogram DESTINATION lib)
+install(TARGETS ${PROJECT_NAME} mwm_csp geogram DESTINATION lib)
 
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC)
 target_compile_options(${PROJECT_NAME} PUBLIC
@@ -113,8 +106,6 @@ target_compile_options(${PROJECT_NAME} PUBLIC
 # Keep strict IEEE on geometry-critical code — NOT using -ffast-math globally
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
 
-# Install embedded dependency headers (directly to include/ for flat includes like <ptm_functions.h>)
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/ptm/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/geogram/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/fast_float/ DESTINATION include FILES_MATCHING PATTERN "*.h")

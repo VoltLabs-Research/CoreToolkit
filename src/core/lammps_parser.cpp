@@ -185,6 +185,7 @@ struct AtomColumns{
     int posZCol = -1;
     bool scaled = false;
     bool valid = false;
+    std::vector<std::string> columnNames;
     std::vector<ColumnKind> kinds;
     std::vector<int> extraIndices;
     std::vector<ExtraAtomColumn> extras;
@@ -208,6 +209,7 @@ inline AtomColumns parseAtomColumns(const LineView& line){
     int tokenIndex = 0;
     int columnIndex = 0;
     const char* p = line.begin;
+    cols.columnNames.clear();
     while(p < line.end){
         p = skipSpaces(p, line.end);
         if(p >= line.end) break;
@@ -223,6 +225,7 @@ inline AtomColumns parseAtomColumns(const LineView& line){
             else if(tok == "xs") cols.xsCol = columnIndex;
             else if(tok == "ys") cols.ysCol = columnIndex;
             else if(tok == "zs") cols.zsCol = columnIndex;
+            cols.columnNames.emplace_back(tok);
             ++columnIndex;
         }
         ++tokenIndex;
@@ -294,6 +297,8 @@ struct ExpandedExtraColumn{
 };
 
 inline void initializeExtraAtomColumns(const AtomColumns& cols, LammpsParser::Frame& frame){
+    frame.atomColumnOrder = cols.columnNames;
+    frame.atomColumnsScaled = cols.scaled;
     frame.atomProperties.clear();
     for(const auto& extra : cols.extras){
         auto& column = frame.atomProperties[extra.name];
@@ -658,6 +663,225 @@ inline bool writeDump(
     return static_cast<bool>(out);
 }
 
+inline void mergeHeaders(
+    const LammpsParser::Frame& frame,
+    const std::vector<LammpsParser::ExtraHeader>& extraHeaders,
+    std::vector<LammpsParser::ExtraHeader>& mergedHeaders
+){
+    std::unordered_map<std::string, std::string> values = frame.headerProperties;
+    std::unordered_map<std::string, bool> seen;
+    seen.reserve(values.size() + extraHeaders.size());
+
+    for(const auto& header : extraHeaders){
+        values[header.name] = header.value;
+        seen[header.name] = true;
+    }
+
+    mergedHeaders.clear();
+    mergedHeaders.reserve(values.size() + extraHeaders.size());
+    for(const auto& name : frame.headerOrder){
+        auto it = values.find(name);
+        if(it == values.end()){
+            continue;
+        }
+        mergedHeaders.push_back({name, it->second});
+        seen[name] = true;
+    }
+
+    for(const auto& header : extraHeaders){
+        if(seen.find(header.name) == seen.end()){
+            mergedHeaders.push_back(header);
+            seen[header.name] = true;
+        }
+    }
+}
+
+inline bool writeMergedDump(
+    const std::string& filename,
+    const LammpsParser::Frame& frame,
+    const std::vector<ExpandedExtraColumn>& extraColumns,
+    const std::vector<int>* propertyRowsByAtomIndex,
+    const std::vector<LammpsParser::ExtraHeader>& extraHeaders,
+    bool overwriteExistingColumns
+){
+    if(frame.natoms < 0){
+        std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
+        return false;
+    }
+
+    const auto atomCount = static_cast<std::size_t>(frame.natoms);
+    if(propertyRowsByAtomIndex && propertyRowsByAtomIndex->size() != atomCount){
+        std::cerr << "Error: atom-property lookup table size does not match frame atom count" << std::endl;
+        return false;
+    }
+
+    std::ofstream out(filename, std::ios::binary);
+    if(!out.is_open()){
+        std::cerr << "Error: cannot open file " << filename << " for writing" << std::endl;
+        return false;
+    }
+
+    std::vector<char> buffer(1 << 20);
+    out.rdbuf()->pubsetbuf(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+
+    const auto bounds = buildDumpBoxBounds(frame.simulationCell);
+    const auto& pbc = frame.simulationCell.pbcFlags();
+
+    out << "ITEM: TIMESTEP\n" << frame.timestep << '\n'
+        << "ITEM: NUMBER OF ATOMS\n" << frame.natoms << '\n';
+
+    std::vector<LammpsParser::ExtraHeader> mergedHeaders;
+    mergeHeaders(frame, extraHeaders, mergedHeaders);
+    for(const auto& header : mergedHeaders){
+        out << "ITEM: " << header.name << '\n'
+            << header.value << '\n';
+    }
+
+    out << "ITEM: BOX BOUNDS";
+
+    if(bounds.triclinic){
+        out << " xy xz yz";
+    }
+
+    out << ' '
+        << (pbc[0] ? "pp" : "ff") << ' '
+        << (pbc[1] ? "pp" : "ff") << ' '
+        << (pbc[2] ? "pp" : "ff") << '\n';
+
+    if(bounds.triclinic){
+        out << bounds.xloBound << ' ' << bounds.xhiBound << ' ' << bounds.xy << '\n'
+            << bounds.yloBound << ' ' << bounds.yhiBound << ' ' << bounds.xz << '\n'
+            << bounds.zloBound << ' ' << bounds.zhiBound << ' ' << bounds.yz << '\n';
+    }else{
+        out << bounds.xloBound << ' ' << bounds.xhiBound << '\n'
+            << bounds.yloBound << ' ' << bounds.yhiBound << '\n'
+            << bounds.zloBound << ' ' << bounds.zhiBound << '\n';
+    }
+
+    std::unordered_map<std::string, const ExpandedExtraColumn*> extraByName;
+    extraByName.reserve(extraColumns.size());
+    for(const auto& column : extraColumns){
+        extraByName[column.name] = &column;
+    }
+
+    std::vector<std::string> columnOrder = frame.atomColumnOrder;
+    if(columnOrder.empty()){
+        columnOrder = { "id", "type", "x", "y", "z" };
+    }
+
+    std::unordered_map<std::string, std::size_t> columnIndex;
+    columnIndex.reserve(columnOrder.size());
+    for(std::size_t i = 0; i < columnOrder.size(); ++i){
+        columnIndex[columnOrder[i]] = i;
+    }
+
+    for(const auto& column : extraColumns){
+        if(columnIndex.find(column.name) == columnIndex.end()){
+            columnIndex[column.name] = columnOrder.size();
+            columnOrder.push_back(column.name);
+        }
+    }
+
+    out << "ITEM: ATOMS";
+    for(const auto& name : columnOrder){
+        out << ' ' << name;
+    }
+    out << '\n';
+
+    const auto& inverseCell = frame.simulationCell.inverseMatrix();
+
+    for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
+        const int atomId = resolveAtomId(frame, atomIndex);
+        const int atomType = resolveAtomType(frame, atomIndex);
+        const Point3 position = resolveAtomPosition(frame, atomIndex);
+        const Point3 reduced = inverseCell * position;
+
+        const int propertyRow = propertyRowsByAtomIndex
+            ? (*propertyRowsByAtomIndex)[atomIndex]
+            : -1;
+
+        for(std::size_t colIdx = 0; colIdx < columnOrder.size(); ++colIdx){
+            if(colIdx > 0){
+                out << ' ';
+            }
+            const std::string& name = columnOrder[colIdx];
+            if(name == "id"){
+                out << atomId;
+                continue;
+            }
+            if(name == "type"){
+                out << atomType;
+                continue;
+            }
+            if(name == "x"){
+                out << position.x();
+                continue;
+            }
+            if(name == "y"){
+                out << position.y();
+                continue;
+            }
+            if(name == "z"){
+                out << position.z();
+                continue;
+            }
+            if(name == "xs"){
+                out << reduced.x();
+                continue;
+            }
+            if(name == "ys"){
+                out << reduced.y();
+                continue;
+            }
+            if(name == "zs"){
+                out << reduced.z();
+                continue;
+            }
+
+            auto extraIt = extraByName.find(name);
+            if(extraIt != extraByName.end() && (overwriteExistingColumns ||
+                frame.atomProperties.find(name) == frame.atomProperties.end())){
+                const auto* column = extraIt->second;
+                if(propertyRow < 0){
+                    writeDefaultExtraValue(out, column->dataType);
+                }else{
+                    writeExtraValue(out, *column, static_cast<std::size_t>(propertyRow));
+                }
+                continue;
+            }
+
+            auto propIt = frame.atomProperties.find(name);
+            if(propIt == frame.atomProperties.end()){
+                out << 0;
+                continue;
+            }
+            const auto& prop = propIt->second;
+            if(atomIndex >= prop.size()){
+                out << 0;
+                continue;
+            }
+            switch(prop.dataType){
+                case DataType::Int:
+                    out << prop.ints[atomIndex];
+                    break;
+                case DataType::Int64:
+                    out << static_cast<std::uint64_t>(prop.int64s[atomIndex]);
+                    break;
+                case DataType::Double:
+                    out << prop.doubles[atomIndex];
+                    break;
+                case DataType::Void:
+                    out << 0;
+                    break;
+            }
+        }
+        out << '\n';
+    }
+
+    return static_cast<bool>(out);
+}
+
 inline const char* parseAtomLine(
     const char* p,
     const char* end,
@@ -823,8 +1047,11 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
     frame.positions.resize(frame.natoms);
     frame.types.resize(frame.natoms);
     frame.ids.resize(frame.natoms);
+    frame.headerOrder.clear();
     frame.headerProperties.clear();
     frame.atomProperties.clear();
+    frame.atomColumnOrder.clear();
+    frame.atomColumnsScaled = false;
 
     while(true){
         if(!readLine(cursor, end, line)) return false;
@@ -836,6 +1063,7 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
             static_cast<std::size_t>(line.end - (line.begin + 6))
         ));
         if(!readLine(cursor, end, line)) return false;
+        frame.headerOrder.push_back(key);
         frame.headerProperties[key] = trimCopy(lineToString(line));
     }
 
@@ -1048,6 +1276,66 @@ bool LammpsParser::writeFileWithExtraColumns(
     return writeDump(filename, frame, expandedColumns, &propertyRowsByAtomIndex, extraHeaders);
 }
 
+bool LammpsParser::writeFileMergedWithExtraColumns(
+    const std::string& filename,
+    const Frame& frame,
+    const std::vector<int>& propertyAtomIds,
+    const std::vector<ExtraColumn>& extraColumns,
+    const std::vector<ExtraHeader>& extraHeaders,
+    bool overwriteExistingColumns
+){
+    if(frame.natoms < 0){
+        std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
+        return false;
+    }
+
+    std::vector<int> resolvedPropertyAtomIds;
+    const std::vector<int>* atomIdsForMapping = &propertyAtomIds;
+    if(!extraColumns.empty() && propertyAtomIds.empty()){
+        resolvedPropertyAtomIds.resize(static_cast<std::size_t>(frame.natoms));
+        for(std::size_t atomIndex = 0; atomIndex < resolvedPropertyAtomIds.size(); ++atomIndex){
+            resolvedPropertyAtomIds[atomIndex] = resolveAtomId(frame, atomIndex);
+        }
+        atomIdsForMapping = &resolvedPropertyAtomIds;
+    }
+
+    std::vector<ExpandedExtraColumn> expandedColumns;
+    if(!expandExtraColumns(extraColumns, *atomIdsForMapping, expandedColumns)){
+        return false;
+    }
+
+    std::unordered_map<int, int> propertyRowByAtomId;
+    propertyRowByAtomId.reserve(atomIdsForMapping->size());
+
+    for(std::size_t rowIndex = 0; rowIndex < atomIdsForMapping->size(); ++rowIndex){
+        const int atomId = (*atomIdsForMapping)[rowIndex];
+        auto [it, inserted] = propertyRowByAtomId.emplace(atomId, static_cast<int>(rowIndex));
+        if(!inserted){
+            std::cerr << "Error: duplicate atom id " << atomId
+                      << " in extra dump property mapping" << std::endl;
+            return false;
+        }
+    }
+
+    std::vector<int> propertyRowsByAtomIndex(static_cast<std::size_t>(frame.natoms), -1);
+    for(std::size_t atomIndex = 0; atomIndex < propertyRowsByAtomIndex.size(); ++atomIndex){
+        const int atomId = resolveAtomId(frame, atomIndex);
+        auto it = propertyRowByAtomId.find(atomId);
+        if(it != propertyRowByAtomId.end()){
+            propertyRowsByAtomIndex[atomIndex] = it->second;
+        }
+    }
+
+    return writeMergedDump(
+        filename,
+        frame,
+        expandedColumns,
+        &propertyRowsByAtomIndex,
+        extraHeaders,
+        overwriteExistingColumns
+    );
+}
+
 // Parse a LAMMPS dump from any input stream.
 // Return header lines, box bounds, and atom data in sequence.
 // If any stage fails, the function aborts and returns false.
@@ -1085,8 +1373,11 @@ bool LammpsParser::readHeader(std::istream &in, Frame &f) {
     f.positions.clear();
     f.types.clear();
     f.ids.clear();
+    f.headerOrder.clear();
     f.headerProperties.clear();
     f.atomProperties.clear();
+    f.atomColumnOrder.clear();
+    f.atomColumnsScaled = false;
     f.positions.reserve(f.natoms);
     f.types.reserve(f.natoms);
     f.ids.reserve(f.natoms);
@@ -1115,7 +1406,9 @@ bool LammpsParser::readBoxBounds(std::istream &in, Frame &f){
             return false;
         }
 
-        f.headerProperties[trimCopy(std::string_view(line).substr(6))] = trimCopy(value);
+        const std::string key = trimCopy(std::string_view(line).substr(6));
+        f.headerOrder.push_back(key);
+        f.headerProperties[key] = trimCopy(value);
     }
     if(line.find("ITEM: BOX BOUNDS") == std::string::npos){
         return false;

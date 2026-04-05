@@ -70,7 +70,10 @@ public:
         std::vector<Point3> positions;
         std::vector<int> types;
         std::vector<int> ids;
+        std::vector<std::string> headerOrder;
         std::unordered_map<std::string, std::string> headerProperties;
+        std::vector<std::string> atomColumnOrder;
+        bool atomColumnsScaled = false;
         std::unordered_map<std::string, AtomColumn> atomProperties;
 
         const std::string* findHeaderProperty(const std::string& name) const{
@@ -141,6 +144,14 @@ public:
         const std::vector<int>& propertyAtomIds,
         const std::vector<ExtraColumn>& extraColumns,
         const std::vector<ExtraHeader>& extraHeaders = {}
+    );
+    bool writeFileMergedWithExtraColumns(
+        const std::string& filename,
+        const Frame& frame,
+        const std::vector<int>& propertyAtomIds,
+        const std::vector<ExtraColumn>& extraColumns,
+        const std::vector<ExtraHeader>& extraHeaders = {},
+        bool overwriteExistingColumns = true
     );
 
 private:

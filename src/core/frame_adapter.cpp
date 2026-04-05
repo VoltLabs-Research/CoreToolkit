@@ -7,7 +7,7 @@ namespace Volt{
 
 using namespace Volt::Particles;
 
-namespace {
+namespace FrameAdapterDetail {
 
 void setError(std::string* errorMessage, std::string error){
 	if(errorMessage){
@@ -51,6 +51,8 @@ const LammpsParser::AtomColumn* requireColumn(
 }
 
 }
+
+using namespace FrameAdapterDetail;
 
 std::shared_ptr<ParticleProperty> FrameAdapter::createPositionProperty(const LammpsParser::Frame& frame){
 	std::shared_ptr<ParticleProperty> property(new ParticleProperty(frame.natoms, ParticleProperty::PositionProperty, 0, true));

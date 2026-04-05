@@ -19,6 +19,24 @@ std::shared_ptr<void> frameOwner(const LammpsParser::Frame& frame){
 	return std::shared_ptr<void>(const_cast<LammpsParser::Frame*>(&frame), [](void*){});
 }
 
+template<typename T>
+std::shared_ptr<ParticleProperty> createScalarPropertyShared(
+	const LammpsParser::Frame& frame,
+	const std::vector<T>& buffer,
+	DataType dataType
+){
+	auto property = std::make_shared<ParticleProperty>();
+	property->bindExternalData(
+		const_cast<T*>(buffer.data()),
+		buffer.size(),
+		dataType,
+		1,
+		sizeof(T),
+		frameOwner(frame)
+	);
+	return property;
+}
+
 const LammpsParser::AtomColumn* requireColumn(
 	const LammpsParser::Frame& frame,
 	const std::string& columnName,
@@ -157,17 +175,7 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createIntPropertyShared(
 	if(!column){
 		return nullptr;
 	}
-
-	auto property = std::make_shared<ParticleProperty>();
-	property->bindExternalData(
-		const_cast<int*>(column->ints.data()),
-		column->ints.size(),
-		DataType::Int,
-		1,
-		sizeof(int),
-		frameOwner(frame)
-	);
-	return property;
+	return createScalarPropertyShared(frame, column->ints, DataType::Int);
 }
 
 std::shared_ptr<ParticleProperty> FrameAdapter::createInt64PropertyShared(
@@ -178,17 +186,7 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createInt64PropertyShared(
 	if(!column){
 		return nullptr;
 	}
-
-	auto property = std::make_shared<ParticleProperty>();
-	property->bindExternalData(
-		const_cast<std::int64_t*>(column->int64s.data()),
-		column->int64s.size(),
-		DataType::Int64,
-		1,
-		sizeof(std::int64_t),
-		frameOwner(frame)
-	);
-	return property;
+	return createScalarPropertyShared(frame, column->int64s, DataType::Int64);
 }
 
 std::shared_ptr<ParticleProperty> FrameAdapter::createQuaternionPropertyShared(

@@ -674,7 +674,6 @@ inline void mergeHeaders(
 
     for(const auto& header : extraHeaders){
         values[header.name] = header.value;
-        seen[header.name] = true;
     }
 
     mergedHeaders.clear();
@@ -762,7 +761,7 @@ inline bool writeMergedDump(
     std::unordered_map<std::string, const ExpandedExtraColumn*> extraByName;
     extraByName.reserve(extraColumns.size());
     for(const auto& column : extraColumns){
-        extraByName[column.name] = &column;
+        extraByName[std::string(column.name)] = &column;
     }
 
     std::vector<std::string> columnOrder = frame.atomColumnOrder;
@@ -777,9 +776,10 @@ inline bool writeMergedDump(
     }
 
     for(const auto& column : extraColumns){
-        if(columnIndex.find(column.name) == columnIndex.end()){
-            columnIndex[column.name] = columnOrder.size();
-            columnOrder.push_back(column.name);
+        const std::string columnName(column.name);
+        if(columnIndex.find(columnName) == columnIndex.end()){
+            columnIndex[columnName] = columnOrder.size();
+            columnOrder.push_back(columnName);
         }
     }
 

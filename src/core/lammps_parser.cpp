@@ -24,7 +24,7 @@
 
 namespace Volt{
 
-namespace {
+namespace LammpsParserDetail {
 
 struct LineView{
     const char* begin = nullptr;
@@ -968,7 +968,9 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
     return true;
 }
 
-} // namespace
+} // namespace LammpsParserDetail
+
+using namespace LammpsParserDetail;
 
 // Parse a LAMMPS dump file into a Frame structure.
 // Opens the given filename for input and hands the resulting stream to parseStream().

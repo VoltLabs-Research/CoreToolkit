@@ -7,6 +7,40 @@
 
 namespace Volt::Particles{
 
+namespace PropertyBaseDetail{
+
+size_t resolveDataTypeSize(DataType dataType){
+	switch(dataType){
+		case DataType::Int:
+			return sizeof(int);
+		case DataType::Double:
+			return sizeof(double);
+		case DataType::Int64:
+			return sizeof(std::uint64_t);
+		case DataType::Void:
+			return 0;
+		default:
+			throw std::runtime_error("PropertyBase: Tipo de dato desconocido ID = " + std::to_string(static_cast<int>(dataType)));
+	}
+}
+
+size_t resolveStride(DataType dataType, size_t componentCount, size_t stride){
+	if(dataType == DataType::Void && componentCount > 0){
+		throw std::runtime_error("PropertyBase: DATATYPE_VOID no puede tener componentCount > 0");
+	}
+	if(stride == 0){
+		const size_t resolvedDataTypeSize = resolveDataTypeSize(dataType);
+		if(componentCount > 0 && resolvedDataTypeSize > 0){
+			return componentCount * resolvedDataTypeSize;
+		}
+	}
+	return stride;
+}
+
+}
+
+using namespace PropertyBaseDetail;
+
 PropertyBase::PropertyBase()
 	: _dataType(DataType::Void)
 	, _dataTypeSize(0)
@@ -22,28 +56,8 @@ PropertyBase::PropertyBase(
 	size_t stride, 
 	bool initializeMemory
 ) : _dataType(dataType), _dataTypeSize(0), _numElements(0), _stride(stride), _componentCount(componentCount), _data(nullptr){
-	if(_dataType == DataType::Void && _componentCount > 0){
-		throw std::runtime_error("PropertyBase: DATATYPE_VOID no puede tener componentCount > 0");
-	}
-
-	_dataTypeSize = [dataType]() -> size_t {
-		switch(dataType){
-			case DataType::Int:
-				return sizeof(int);
-			case DataType::Double:
-				return sizeof(double);
-			case DataType::Int64:
-				return sizeof(std::uint64_t);
-			case DataType::Void:
-				return 0;
-			default:
-				throw std::runtime_error("PropertyBase: Tipo de dato desconocido ID = " + std::to_string(static_cast<int>(dataType)));
-		}
-	}();
-
-	if(_stride == 0 && _componentCount > 0 && _dataTypeSize > 0){
-		_stride = _componentCount * _dataTypeSize;
-	}
+	_dataTypeSize = resolveDataTypeSize(_dataType);
+	_stride = resolveStride(_dataType, _componentCount, _stride);
 
 	if(count > 0 && _stride == 0){
 		throw std::runtime_error("PropertyBase: Cannot resize with zero stride");
@@ -105,28 +119,8 @@ void PropertyBase::bindExternalData(
     std::size_t stride,
     std::shared_ptr<void> owner
 ){
-    if(dataType == DataType::Void && componentCount > 0){
-        throw std::runtime_error("PropertyBase: DATATYPE_VOID no puede tener componentCount > 0");
-    }
-
-    _dataTypeSize = [dataType]() -> size_t {
-        switch(dataType){
-            case DataType::Int:
-                return sizeof(int);
-            case DataType::Double:
-                return sizeof(double);
-            case DataType::Int64:
-                return sizeof(std::uint64_t);
-            case DataType::Void:
-                return 0;
-            default:
-                throw std::runtime_error("PropertyBase: Tipo de dato desconocido ID = " + std::to_string(static_cast<int>(dataType)));
-        }
-    }();
-
-    if(stride == 0 && componentCount > 0 && _dataTypeSize > 0){
-        stride = componentCount * _dataTypeSize;
-    }
+    _dataTypeSize = resolveDataTypeSize(dataType);
+    stride = resolveStride(dataType, componentCount, stride);
 
     if(count > 0 && stride == 0){
         throw std::runtime_error("PropertyBase: Cannot bind external data with zero stride");

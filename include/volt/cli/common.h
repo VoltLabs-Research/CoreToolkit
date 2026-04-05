@@ -105,6 +105,25 @@ inline bool hasOption(const std::map<std::string, std::string>& opts, const std:
     return opts.find(key) != opts.end();
 }
 
+template<typename UsageFn>
+inline int handleHelpOrMissingInput(
+    int argc,
+    char* argv[],
+    const std::map<std::string, std::string>& opts,
+    const std::string& filename,
+    UsageFn&& showUsage
+) {
+    if(argc < 2){
+        showUsage(argv[0]);
+        return 1;
+    }
+    if(hasOption(opts, "--help") || filename.empty()){
+        showUsage(argv[0]);
+        return filename.empty() ? 1 : 0;
+    }
+    return -1;
+}
+
 inline void printUsageHeader(const std::string& name, const std::string& description) {
     std::cerr << "\n" << description << "\n\n"
               << "Usage: " << name << " <lammps_file> [output_base] [options]\n\n"

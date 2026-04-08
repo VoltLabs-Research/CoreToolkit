@@ -15,7 +15,7 @@ class CoreToolkitConan(ConanFile):
         "nlohmann_json/3.11.3",
     )
     default_options = {"hwloc/*:shared": True}
-    exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*"
+    exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "topologies/*", "topologies/**/*"
 
     def layout(self):
         cmake_layout(self)

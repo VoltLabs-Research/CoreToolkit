@@ -33,11 +33,13 @@ COPY tools/CoreToolkit /src/CoreToolkit
 COPY plugins/StructureIdentification /src/StructureIdentification
 COPY plugins/CommonNeighborAnalysis /src/CommonNeighborAnalysis
 COPY plugins/PolyhedralTemplateMatching /src/PolyhedralTemplateMatching
+COPY plugins/OpenDXA /src/OpenDXA
 
 RUN conan export CoreToolkit \
     && conan export StructureIdentification \
     && conan export CommonNeighborAnalysis \
-    && conan export PolyhedralTemplateMatching
+    && conan export PolyhedralTemplateMatching \
+    && conan export OpenDXA
 
 RUN conan install --requires="coretoolkit/1.0.0" \
         -o "hwloc/*:shared=True" \

@@ -74,6 +74,9 @@ file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cp
 
 add_library(${PROJECT_NAME} STATIC ${LIBRARY_SOURCES})
 target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
+target_compile_definitions(${PROJECT_NAME} PUBLIC
+	VOLT_CORETOOLKIT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
 	${CMAKE_SOURCE_DIR}/include
@@ -109,3 +112,4 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/geogram/ DESTINATION include FILES_MATCHING PATTERN "*.h")
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/fast_float/ DESTINATION include FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/topologies/ DESTINATION share/volt/topologies)

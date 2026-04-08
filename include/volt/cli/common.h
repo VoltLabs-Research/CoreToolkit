@@ -42,7 +42,10 @@ inline std::map<std::string, std::string> parseArgs(
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg.rfind("--", 0) == 0) {
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
+            const std::size_t equalsPos = arg.find('=');
+            if (equalsPos != std::string::npos) {
+                options[arg.substr(0, equalsPos)] = arg.substr(equalsPos + 1);
+            } else if (i + 1 < argc && argv[i + 1][0] != '-') {
                 options[arg] = argv[++i];
             } else {
                 options[arg] = "true";

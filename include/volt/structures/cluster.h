@@ -3,6 +3,8 @@
 #include <volt/core/volt.h>
 #include <tbb/spin_mutex.h>
 #include <atomic>
+#include <string>
+#include <utility>
 
 namespace Volt{
 
@@ -40,6 +42,7 @@ struct ClusterTransition{
 struct Cluster{
 	int id;
 	int structure;
+	std::string topologyName;
 	int atomCount = 0;
 
 	ClusterTransition* transitions = nullptr;
@@ -56,7 +59,8 @@ struct Cluster{
 	ClusterTransition* parentTransition = nullptr;
     mutable tbb::spin_mutex mutex;
 
-	Cluster(int _id, int _structure) : id(_id), structure(_structure){}
+	Cluster(int _id, int _structure, std::string _topologyName = {})
+		: id(_id), structure(_structure), topologyName(std::move(_topologyName)){}
 
 	void insertTransition(ClusterTransition* newTransition){
 		assert(newTransition->cluster1 == this);

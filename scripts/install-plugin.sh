@@ -1,0 +1,393 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GITHUB_ORG="${GITHUB_ORG:-https://github.com/VoltLabs-Research}"
+WORK_DIR="${WORK_DIR:-./voltlabs-ecosystem}"
+BUILD_TYPE="${BUILD_TYPE:-Release}"
+CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True")
+SUPPORTED_CMAKE_VERSION="3.20.0"
+SUPPORTED_CONAN_VERSION="2.0.0"
+APT_UPDATED=0
+
+log() {
+    printf '[install-plugin] %s\n' "$*"
+}
+
+die() {
+    printf '[install-plugin] error: %s\n' "$*" >&2
+    exit 1
+}
+
+has_command() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+version_ge() {
+    if has_command dpkg; then
+        dpkg --compare-versions "$1" ge "$2"
+    else
+        [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
+    fi
+}
+
+usage() {
+    cat <<'EOF'
+Usage:
+  install-plugin.sh <plugin>
+
+Supported plugins:
+  AtomicStrain
+  CentroSymmetryParameter
+  ClusterAnalysis
+  CommonNeighborAnalysis
+  CoordinationAnalysis
+  DisplacementsAnalysis
+  ElasticStrain
+  GrainSegmentation
+  LineReconstructionDXA
+  OpenDXA
+  PatternStructureMatching
+  PolyhedralTemplateMatching
+  StructureIdentification
+
+Environment variables:
+  WORK_DIR     Ecosystem root to clone/build into (default: ./voltlabs-ecosystem)
+  GITHUB_ORG   GitHub organization base URL (default: https://github.com/VoltLabs-Research)
+  BUILD_TYPE   CMake build type for the target plugin (default: Release)
+EOF
+}
+
+canonical_plugin_name() {
+    local raw="${1:-}"
+    local normalized
+
+    normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '_-')"
+
+    case "$normalized" in
+        atomicstrain) printf 'AtomicStrain\n' ;;
+        centrosymmetryparameter) printf 'CentroSymmetryParameter\n' ;;
+        clusteranalysis) printf 'ClusterAnalysis\n' ;;
+        commonneighboranalysis) printf 'CommonNeighborAnalysis\n' ;;
+        coordinationanalysis) printf 'CoordinationAnalysis\n' ;;
+        displacementsanalysis) printf 'DisplacementsAnalysis\n' ;;
+        elasticstrain) printf 'ElasticStrain\n' ;;
+        grainsegmentation) printf 'GrainSegmentation\n' ;;
+        linereconstructiondxa) printf 'LineReconstructionDXA\n' ;;
+        opendxa) printf 'OpenDXA\n' ;;
+        patternstructurematching) printf 'PatternStructureMatching\n' ;;
+        polyhedraltemplatematching) printf 'PolyhedralTemplateMatching\n' ;;
+        structureidentification) printf 'StructureIdentification\n' ;;
+        *) return 1 ;;
+    esac
+}
+
+dependency_chain() {
+    local plugin="$1"
+
+    case "$plugin" in
+        AtomicStrain)
+            printf '%s\n' CoreToolkit AtomicStrain
+            ;;
+        CentroSymmetryParameter)
+            printf '%s\n' CoreToolkit CentroSymmetryParameter
+            ;;
+        ClusterAnalysis)
+            printf '%s\n' CoreToolkit ClusterAnalysis
+            ;;
+        CommonNeighborAnalysis)
+            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis
+            ;;
+        CoordinationAnalysis)
+            printf '%s\n' CoreToolkit CoordinationAnalysis
+            ;;
+        DisplacementsAnalysis)
+            printf '%s\n' CoreToolkit DisplacementsAnalysis
+            ;;
+        ElasticStrain)
+            printf '%s\n' CoreToolkit StructureIdentification ElasticStrain
+            ;;
+        GrainSegmentation)
+            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching GrainSegmentation
+            ;;
+        LineReconstructionDXA)
+            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching OpenDXA LineReconstructionDXA
+            ;;
+        OpenDXA)
+            printf '%s\n' CoreToolkit StructureIdentification OpenDXA
+            ;;
+        PatternStructureMatching)
+            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PatternStructureMatching
+            ;;
+        PolyhedralTemplateMatching)
+            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching
+            ;;
+        StructureIdentification)
+            printf '%s\n' CoreToolkit StructureIdentification
+            ;;
+        *)
+            die "unsupported plugin '$plugin'"
+            ;;
+    esac
+}
+
+repo_subdir() {
+    local repo="$1"
+
+    case "$repo" in
+        CoreToolkit)
+            printf 'tools\n'
+            ;;
+        *)
+            printf 'plugins\n'
+            ;;
+    esac
+}
+
+repo_path() {
+    local repo="$1"
+    printf '%s/%s/%s\n' "$WORK_DIR" "$(repo_subdir "$repo")" "$repo"
+}
+
+require_supported_os() {
+    [ -f /etc/os-release ] || die 'unable to detect the operating system (/etc/os-release not found)'
+    # shellcheck disable=SC1091
+    . /etc/os-release
+
+    if [[ "${ID:-}" == "ubuntu" || "${ID:-}" == "debian" ]]; then
+        return
+    fi
+
+    if [[ " ${ID_LIKE:-} " == *' debian '* ]]; then
+        return
+    fi
+
+    die "this installer currently supports Ubuntu/Debian only (detected: ${PRETTY_NAME:-unknown})"
+}
+
+configure_privilege_escalation() {
+    if [[ ${EUID} -eq 0 ]]; then
+        SUDO=()
+        return
+    fi
+
+    has_command sudo || die 'sudo is required to install system packages on Ubuntu/Debian'
+    SUDO=(sudo)
+}
+
+package_installed() {
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+}
+
+apt_update_once() {
+    if [[ ${APT_UPDATED} -eq 0 ]]; then
+        log 'updating apt package index'
+        "${SUDO[@]}" apt-get update
+        APT_UPDATED=1
+    fi
+}
+
+install_apt_packages() {
+    local packages=("$@")
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        return
+    fi
+
+    apt_update_once
+    log "installing system packages: ${packages[*]}"
+    "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+}
+
+ensure_base_packages() {
+    local required_packages=(
+        build-essential
+        ca-certificates
+        cmake
+        git
+        pkg-config
+        python3
+        python3-pip
+    )
+    local missing_packages=()
+    local package
+
+    for package in "${required_packages[@]}"; do
+        if ! package_installed "$package"; then
+            missing_packages+=("$package")
+        fi
+    done
+
+    install_apt_packages "${missing_packages[@]}"
+}
+
+ensure_cmake() {
+    local cmake_version
+
+    has_command cmake || die 'cmake is required but was not found after installing system packages'
+    cmake_version="$(cmake --version | awk 'NR==1 {print $3}')"
+
+    version_ge "$cmake_version" "$SUPPORTED_CMAKE_VERSION" || die "cmake >= $SUPPORTED_CMAKE_VERSION is required, found $cmake_version"
+    log "cmake $cmake_version detected"
+}
+
+ensure_cxx23_compiler() {
+    local compiler="${CXX:-}"
+    local tmpdir
+
+    if [[ -z "$compiler" ]]; then
+        if has_command g++; then
+            compiler='g++'
+        elif has_command clang++; then
+            compiler='clang++'
+        else
+            die 'a C++ compiler is required but neither g++ nor clang++ is available'
+        fi
+    fi
+
+    tmpdir="$(mktemp -d)"
+    cat > "$tmpdir/test.cpp" <<'CPP'
+int main() { return 0; }
+CPP
+
+    if ! "$compiler" -std=c++23 "$tmpdir/test.cpp" -o "$tmpdir/test" >/dev/null 2>&1; then
+        rm -rf "$tmpdir"
+        die "a C++23-capable compiler is required, but '$compiler' could not compile a minimal program with -std=c++23"
+    fi
+
+    rm -rf "$tmpdir"
+    log "C++23 compiler detected: $compiler"
+}
+
+ensure_conan() {
+    local conan_version
+
+    export PATH="$HOME/.local/bin:$PATH"
+
+    if ! has_command conan; then
+        log 'installing Conan with pip'
+        python3 -m pip install --user --upgrade conan
+    fi
+
+    has_command conan || die 'conan is required but was not found after installation'
+    conan_version="$(conan --version | awk '{print $3}')"
+
+    version_ge "$conan_version" "$SUPPORTED_CONAN_VERSION" || die "conan >= $SUPPORTED_CONAN_VERSION is required, found $conan_version"
+    conan profile detect --force >/dev/null
+    log "Conan $conan_version detected"
+}
+
+clone_required_repositories() {
+    local repos=("$@")
+    local repo
+    local path
+    local subdir
+
+    mkdir -p "$WORK_DIR/tools" "$WORK_DIR/plugins"
+
+    for repo in "${repos[@]}"; do
+        path="$(repo_path "$repo")"
+        subdir="$(repo_subdir "$repo")"
+
+        if [[ -d "$path/.git" || -f "$path/conanfile.py" || -f "$path/CMakeLists.txt" ]]; then
+            log "$repo already exists at $path, skipping clone"
+            continue
+        fi
+
+        mkdir -p "$WORK_DIR/$subdir"
+        log "cloning $repo into $path"
+        git clone --depth 1 "$GITHUB_ORG/$repo.git" "$path"
+    done
+}
+
+conan_create_repo() {
+    local repo="$1"
+    local path
+
+    path="$(repo_path "$repo")"
+    [[ -d "$path" ]] || die "missing repository at $path"
+
+    log "packaging $repo with Conan"
+    (
+        cd "$path"
+        conan create . "${CONAN_OPTS[@]}"
+    )
+}
+
+build_target_locally() {
+    local plugin="$1"
+    local path build_root cmake_build_dir
+    local -a executables=()
+    local exe
+
+    path="$(repo_path "$plugin")"
+    build_root="$path/build-local"
+    cmake_build_dir="$build_root/build/$BUILD_TYPE"
+
+    [[ -d "$path" ]] || die "missing repository at $path"
+
+    log "building $plugin locally in $cmake_build_dir"
+    rm -rf "$build_root"
+
+    (
+        cd "$path"
+        conan install . "${CONAN_OPTS[@]}" --output-folder="$build_root"
+        cmake -S . -B "$cmake_build_dir" \
+            -DCMAKE_TOOLCHAIN_FILE="$cmake_build_dir/generators/conan_toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+        cmake --build "$cmake_build_dir" -j"$(nproc)"
+    )
+
+    while IFS= read -r exe; do
+        executables+=("$exe")
+    done < <(find "$cmake_build_dir" -maxdepth 1 -type f -executable | sort)
+
+    if [[ ${#executables[@]} -eq 0 ]]; then
+        log "$plugin built successfully (no standalone executable found in $cmake_build_dir)"
+        return
+    fi
+
+    log "$plugin built successfully"
+    printf '%s\n' "${executables[@]}"
+}
+
+main() {
+    local requested_plugin plugin
+    local -a chain=()
+    local repo
+
+    requested_plugin="${1:-}"
+    if [[ -z "$requested_plugin" || "$requested_plugin" == "--help" || "$requested_plugin" == "-h" ]]; then
+        usage
+        exit 0
+    fi
+
+    plugin="$(canonical_plugin_name "$requested_plugin")" || {
+        usage
+        die "unknown plugin '$requested_plugin'"
+    }
+
+    require_supported_os
+    configure_privilege_escalation
+    ensure_base_packages
+    ensure_cmake
+    ensure_cxx23_compiler
+    ensure_conan
+
+    mapfile -t chain < <(dependency_chain "$plugin")
+
+    log "target plugin: $plugin"
+    log "dependency chain: ${chain[*]}"
+
+    clone_required_repositories "${chain[@]}"
+
+    for repo in "${chain[@]}"; do
+        if [[ "$repo" == "$plugin" ]]; then
+            continue
+        fi
+        conan_create_repo "$repo"
+    done
+
+    build_target_locally "$plugin"
+    log "done"
+}
+
+main "$@"

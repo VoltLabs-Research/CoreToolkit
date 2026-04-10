@@ -59,3 +59,25 @@ Package naming follows this pattern:
 
 - `ghcr.io/voltlabs-research/<plugin-repo-lowercase>-binary:sha-<commit>-<os>-<arch>`
 - `ghcr.io/voltlabs-research/<plugin-repo-lowercase>-binary:<tag>-<os>-<arch>` for tag builds
+
+## GitHub Actions OCI Images
+
+CoreToolkit also exposes a reusable workflow at `.github/workflows/build-plugin-oci.yml`.
+
+Each plugin repository can call that workflow from its own `.github/workflows/publish-plugin-oci.yml`
+file to:
+
+- build the plugin against a fresh CoreToolkit checkout,
+- install it into a clean staging directory,
+- package that staging directory into a runnable OCI image, and
+- publish the image to GHCR.
+
+The runtime image uses `debian:bookworm-slim` by default, installs the required
+runtime packages, and dispatches through `scripts/plugin-entrypoint.sh` so plugins
+such as `OpenDXA` and `PatternStructureMatching` receive sensible default lattice
+directories inside the image.
+
+OCI image naming follows this pattern:
+
+- `ghcr.io/voltlabs-research/<plugin-repo-lowercase>-oci:sha-<commit>-linux-<arch>`
+- `ghcr.io/voltlabs-research/<plugin-repo-lowercase>-oci:<tag>-linux-<arch>` for tag builds

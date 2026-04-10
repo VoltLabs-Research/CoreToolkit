@@ -1,0 +1,192 @@
+name: Build Plugin OCI
+
+on:
+  workflow_call:
+    inputs:
+      plugin_name:
+        description: Plugin repository name.
+        required: true
+        type: string
+      plugin_binary:
+        description: Executable name installed under bin/.
+        required: true
+        type: string
+      coretoolkit_ref:
+        description: CoreToolkit ref used for the reusable workflow checkout.
+        required: false
+        default: main
+        type: string
+      dependency_repos:
+        description: Newline-separated plugin repositories that must be exported to Conan before building.
+        required: false
+        default: ''
+        type: string
+      runtime_base:
+        description: Base image used for the runtime OCI image.
+        required: false
+        default: debian:bookworm-slim
+        type: string
+      runtime_apt_packages:
+        description: Space-separated Debian packages installed in the runtime image.
+        required: false
+        default: ca-certificates libtbb12 libhwloc15
+        type: string
+
+jobs:
+  build-and-publish:
+    name: Publish ${{ inputs.plugin_name }} OCI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out plugin repository
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Check out CoreToolkit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/CoreToolkit
+          ref: ${{ inputs.coretoolkit_ref }}
+          path: coretoolkit
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Conan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip conan
+          conan profile detect --force
+
+      - name: Build install bundle
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root_dir="$PWD"
+          plugin_dir="$root_dir/plugin"
+          coretoolkit_dir="$root_dir/coretoolkit"
+          output_dir="$root_dir/.ci-output"
+          install_dir="$output_dir/install"
+          mkdir -p "$install_dir"
+
+          conan export "$coretoolkit_dir"
+
+          if [[ -n '${{ inputs.dependency_repos }}' ]]; then
+            while IFS= read -r dependency_repo; do
+              dependency_repo="$(printf '%s' "$dependency_repo" | xargs)"
+              [[ -z "$dependency_repo" ]] && continue
+
+              dependency_dir="$root_dir/$(basename "$dependency_repo")"
+              git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY_OWNER}/${dependency_repo}" "$dependency_dir"
+              conan export "$dependency_dir"
+            done <<'EOF'
+          ${{ inputs.dependency_repos }}
+          EOF
+          fi
+
+          conan install --requires="coretoolkit/1.0.0" \
+            -o "hwloc/*:shared=True" \
+            --build=missing \
+            -s build_type=Release
+          conan install "$plugin_dir" \
+            -o "hwloc/*:shared=True" \
+            --build=missing \
+            -s build_type=Release \
+            --output-folder "$plugin_dir/build"
+
+          toolchain_path="$(find "$plugin_dir/build" -path '*/generators/conan_toolchain.cmake' | head -n 1)"
+          if [[ -z "$toolchain_path" ]]; then
+            echo 'Unable to locate conan_toolchain.cmake' >&2
+            exit 1
+          fi
+          build_dir="$(cd "$(dirname "$toolchain_path")/.." && pwd)"
+
+          cmake -S "$plugin_dir" -B "$build_dir" \
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain_path" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$install_dir" \
+            -DVOLT_ENABLE_NATIVE_OPTIMIZATIONS=OFF \
+            "-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc"
+
+          cmake --build "$build_dir" --config Release --parallel
+          cmake --install "$build_dir" --config Release
+
+          plugin_bin="$install_dir/bin/${{ inputs.plugin_binary }}"
+          if [[ ! -x "$plugin_bin" ]]; then
+            echo "Expected executable not found at $plugin_bin" >&2
+            find "$install_dir" -maxdepth 3 -type f | sort >&2
+            exit 1
+          fi
+
+          owner_lc="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          image_name="$(printf '%s' '${{ inputs.plugin_name }}' | tr '[:upper:]' '[:lower:]')-oci"
+          arch_slug="$(printf '%s' '${{ runner.arch }}' | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
+          immutable_ref="ghcr.io/${owner_lc}/${image_name}:sha-${short_sha}-linux-${arch_slug}"
+          release_ref=''
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            ref_slug="$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#-#g')"
+            release_ref="ghcr.io/${owner_lc}/${image_name}:${ref_slug}-linux-${arch_slug}"
+          fi
+
+          tags="$immutable_ref"
+          if [[ -n "$release_ref" ]]; then
+            tags="${tags}"$'\n'"${release_ref}"
+          fi
+
+          {
+            printf 'immutable_ref=%s\n' "$immutable_ref"
+            printf 'release_ref=%s\n' "$release_ref"
+            printf 'tags<<EOF\n%s\nEOF\n' "$tags"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test OCI image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          local_ref="local/${{ inputs.plugin_binary }}-oci:test"
+          docker build \
+            -f coretoolkit/docker/plugin-runtime.Dockerfile \
+            -t "$local_ref" \
+            --build-arg "PLUGIN_EXECUTABLE=${{ inputs.plugin_binary }}" \
+            --build-arg "RUNTIME_BASE=${{ inputs.runtime_base }}" \
+            --build-arg "RUNTIME_APT_PACKAGES=${{ inputs.runtime_apt_packages }}" \
+            .
+
+          docker run --rm "$local_ref" --help >/dev/null
+
+      - name: Build and push OCI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: coretoolkit/docker/plugin-runtime.Dockerfile
+          push: true
+          tags: ${{ steps.build.outputs.tags }}
+          build-args: |
+            PLUGIN_EXECUTABLE=${{ inputs.plugin_binary }}
+            RUNTIME_BASE=${{ inputs.runtime_base }}
+            RUNTIME_APT_PACKAGES=${{ inputs.runtime_apt_packages }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ inputs.plugin_name }} OCI image
+            org.opencontainers.image.version=${{ github.ref_name }}

@@ -32,6 +32,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(VOLT_ENABLE_NATIVE_OPTIMIZATIONS "Enable CPU-specific optimizations such as -march=native" OFF)
+
 # Build type & optimization
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release MinSizeRel RelWithDebInfo)
@@ -97,9 +99,14 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 install(TARGETS ${PROJECT_NAME} mwm_csp geogram DESTINATION lib)
 
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC)
+set(VOLT_RELEASE_ARCH_FLAGS -mtune=generic)
+if(VOLT_ENABLE_NATIVE_OPTIMIZATIONS)
+    set(VOLT_RELEASE_ARCH_FLAGS -march=native)
+endif()
+
 target_compile_options(${PROJECT_NAME} PUBLIC
 	$<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:
-		-O3 -march=native -fno-math-errno -fno-trapping-math -ffp-contract=fast
+		-O3 ${VOLT_RELEASE_ARCH_FLAGS} -fno-math-errno -fno-trapping-math -ffp-contract=fast
 	>
 )
 # Keep strict IEEE on geometry-critical code — NOT using -ffast-math globally

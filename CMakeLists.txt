@@ -64,6 +64,10 @@ target_include_directories(mwm_csp PUBLIC ${CMAKE_SOURCE_DIR}/dependencies/mwm_c
 # Geogram (Delaunay tessellation)
 set(GEOGRAM_SOURCES ${CMAKE_SOURCE_DIR}/dependencies/geogram/Delaunay_psm.cpp)
 add_library(geogram STATIC ${GEOGRAM_SOURCES})
+# Delaunay_psm.h defaults to DLL import/export unless GEO_STATIC_LIBS is set.
+# We build geogram as a static library, and MSVC rejects definitions marked
+# as dllimport (for example Periodic::reorder_instances).
+target_compile_definitions(geogram PUBLIC GEO_STATIC_LIBS)
 target_include_directories(geogram PUBLIC
 	${CMAKE_SOURCE_DIR}/dependencies/geogram
 	${Boost_INCLUDE_DIRS}

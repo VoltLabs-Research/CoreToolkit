@@ -30,9 +30,6 @@ jobs:
           - os: macos-latest
             os_slug: darwin
             arch_slug: arm64
-          - os: macos-13
-            os_slug: darwin
-            arch_slug: x86_64
           - os: windows-latest
             os_slug: windows
             arch_slug: x86_64

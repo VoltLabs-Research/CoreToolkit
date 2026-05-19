@@ -14,7 +14,8 @@ Output files written to ``--output-dir``::
     <key>-<version>-<os>-<arch>.tar.zst
     <key>-<version>-<os>-<arch>.tar.zst.sha256
 
-Plugins without an executable entrypoint (libraries) are skipped silently.
+Plugins without an executable entrypoint (libraries) are skipped silently
+and do not emit release outputs.
 """
 
 from __future__ import annotations
@@ -63,7 +64,6 @@ def main() -> int:
     binary_name = _binary_name(entrypoint)
     if not binary_name:
         print(f"::notice::{key} has no executable entrypoint; skipping bundle.")
-        _emit_outputs(key, version)
         return 0
 
     staging = output_dir / f".staging-{args.os_slug}-{args.arch_slug}"

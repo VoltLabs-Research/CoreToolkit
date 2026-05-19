@@ -1,7 +1,9 @@
 #pragma once
 
 #include <volt/core/lammps_parser.h>
+#include <volt/utilities/json_utils.h>
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <filesystem>
@@ -55,6 +57,13 @@ inline std::map<std::string, std::string> parseArgs(
         } else if (outputBase.empty()) {
             outputBase = arg;
         }
+    }
+
+    const auto exportAs = options.find("--export-as");
+    if(exportAs != options.end() && !JsonUtils::setExportFormat(exportAs->second)){
+        std::cerr << "Invalid --export-as value '" << exportAs->second
+                  << "'. Expected 'msgpack' or 'json'.\n";
+        std::exit(1);
     }
     
     return options;
@@ -137,7 +146,8 @@ inline void printUsageHeader(const std::string& name, const std::string& descrip
 }
 
 inline void printHelpOption() {
-    std::cerr << "  --help           Show this help message and exit.\n\n";
+    std::cerr << "  --export-as <format> Export file format: msgpack|json. [default: msgpack]\n"
+              << "  --help               Show this help message and exit.\n\n";
 }
 
 }

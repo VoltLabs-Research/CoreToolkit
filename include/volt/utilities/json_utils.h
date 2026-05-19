@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <ostream>
 #include <algorithm>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace Volt {
@@ -50,7 +52,14 @@ private:
 class JsonUtils {
 public:
     /**
-     * @brief Write JSON data to a msgpack file
+     * @brief Select the export format used by writeJsonMsgpackToFile.
+     *
+     * Supported values are "msgpack" and "json". The default is "msgpack".
+     */
+    static bool setExportFormat(const std::string& format);
+
+    /**
+     * @brief Write JSON data using the selected export format
      */
     static bool writeJsonMsgpackToFile(const json& data, const std::string& filePath, bool sortKeys = true);
 

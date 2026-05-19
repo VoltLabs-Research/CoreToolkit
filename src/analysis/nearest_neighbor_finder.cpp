@@ -231,13 +231,12 @@ void NearestNeighborFinder::splitLeafNode(TreeNode* node, int splitDim){
 	numLeafNodes++;
 }
 
-// Builds the entire tree from a flat list of particle positions and an optional
-// selection mask. Handles periodic boundaries by generating a short list of image
-// shifts, sorting them nearest-first and inserting every selected atom into the three.
+// Builds the entire tree from a flat list of particle positions. Handles
+// periodic boundaries by generating a short list of image shifts, sorting them
+// nearest-first and inserting every atom into the tree.
 bool NearestNeighborFinder::prepare(
     ParticleProperty* posProperty, 
-    const SimulationCell& cellData, 
-    ParticleProperty* selectionProperty
+    const SimulationCell& cellData
 ){
 	//assert(posProperty);
 
@@ -327,7 +326,6 @@ bool NearestNeighborFinder::prepare(
 
 	// Insert particles into tree structure. Refine tree as needed.
 	const Point3* p = posProperty->constDataPoint3();
-	const int* sel = selectionProperty ? selectionProperty->constDataInt() : nullptr;
 	atoms.resize(posProperty->size());
 
 	for(NeighborListAtom& a : atoms){
@@ -343,10 +341,7 @@ bool NearestNeighborFinder::prepare(
 			}
 		}
 
-		// TODO: remove selections
-		if(!sel || *sel++){
-			insertParticle(&a, rp, root, 0);
-		}
+		insertParticle(&a, rp, root, 0);
 		++p;
 	}
 

@@ -45,7 +45,7 @@ public:
 		return atoms.size();
 	}
 
-	bool prepare(ParticleProperty* posProperty, const SimulationCell& cellData, ParticleProperty* selectionProperty = nullptr);
+	bool prepare(ParticleProperty* posProperty, const SimulationCell& cellData);
 
 	const Point3& particlePos(size_t index) const;
 

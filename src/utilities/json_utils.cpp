@@ -4,6 +4,30 @@
 
 namespace Volt {
 
+namespace {
+
+std::string& export_format_storage(){
+    static std::string value = "msgpack";
+    return value;
+}
+
+std::string resolve_export_path(const std::string& filePath){
+    const std::string suffix = ".msgpack";
+    if(filePath.size() >= suffix.size() &&
+       filePath.compare(filePath.size() - suffix.size(), suffix.size(), suffix) == 0){
+        return filePath.substr(0, filePath.size() - suffix.size()) + "." + export_format_storage();
+    }
+    return filePath;
+}
+
+}
+
+bool JsonUtils::setExportFormat(const std::string& format){
+    if(format != "msgpack" && format != "json") return false;
+    export_format_storage() = format;
+    return true;
+}
+
 void MsgpackWriter::write_raw(const void* data, size_t size) {
     _os.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
 }
@@ -226,8 +250,13 @@ void JsonUtils::writeJsonAsMsgpack(MsgpackWriter& writer, const json& data, bool
 }
 
 bool JsonUtils::writeJsonMsgpackToFile(const json& data, const std::string& filePath, bool sortKeys) {
+    const std::string resolvedPath = resolve_export_path(filePath);
+    if(export_format_storage() == "json"){
+        return writeJsonToFile(data, resolvedPath);
+    }
+
     try {
-        std::ofstream of(filePath, std::ios::binary);
+        std::ofstream of(resolvedPath, std::ios::binary);
         if (!of.is_open()) return false;
         MsgpackWriter writer(of);
         writeJsonAsMsgpack(writer, data, sortKeys);

@@ -3,10 +3,6 @@ name: Build Plugin Binary
 on:
   workflow_call:
     inputs:
-      plugin_name:
-        description: Plugin repository name.
-        required: true
-        type: string
       coretoolkit_ref:
         description: CoreToolkit ref used for the reusable workflow checkout.
         required: false
@@ -19,19 +15,30 @@ on:
         type: string
 
 jobs:
-  build-and-publish:
-    name: Publish ${{ inputs.plugin_name }} (${{ matrix.os }})
+  build:
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     permissions:
-      contents: read
-      packages: write
+      contents: write
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          - os: ubuntu-latest
+            os_slug: linux
+            arch_slug: x86_64
+          - os: macos-latest
+            os_slug: darwin
+            arch_slug: arm64
+          - os: macos-13
+            os_slug: darwin
+            arch_slug: x86_64
+          - os: windows-latest
+            os_slug: windows
+            arch_slug: x86_64
+    outputs:
+      plugin_key: ${{ steps.bundle.outputs.plugin_key }}
+      plugin_version: ${{ steps.bundle.outputs.plugin_version }}
     steps:
       - name: Check out plugin repository
         uses: actions/checkout@v4
@@ -54,42 +61,23 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up ORAS
-        uses: oras-project/setup-oras@v1
-
-      - name: Install Conan
+      - name: Install Conan and zstandard
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip conan
+          python -m pip install --upgrade pip conan zstandard
           conan profile detect --force
 
-      - name: Build install bundle
+      - name: Build plugin
         id: build
         shell: bash
         run: |
           set -euo pipefail
 
-          root_dir="$PWD"
-          plugin_dir="$root_dir/plugin"
-          coretoolkit_dir="$root_dir/coretoolkit"
-          output_dir="$root_dir/.ci-output"
-          install_dir="$output_dir/install"
-          archive_dir="$output_dir/archive"
-          mkdir -p "$install_dir" "$archive_dir"
-
-          plugin_repo='${{ inputs.plugin_name }}'
-          owner_lc="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
-          package_name="$(printf '%s' "$plugin_repo" | tr '[:upper:]' '[:lower:]')-binary"
-          os_slug="$(printf '%s' '${{ runner.os }}' | tr '[:upper:]' '[:lower:]')"
-          arch_slug="$(printf '%s' '${{ runner.arch }}' | tr '[:upper:]' '[:lower:]')"
-          ref_slug="$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._-]#-#g')"
-          short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
-          immutable_ref="ghcr.io/${owner_lc}/${package_name}:sha-${short_sha}-${os_slug}-${arch_slug}"
-          release_ref=''
-          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
-            release_ref="ghcr.io/${owner_lc}/${package_name}:${ref_slug}-${os_slug}-${arch_slug}"
-          fi
+          plugin_dir="$PWD/plugin"
+          coretoolkit_dir="$PWD/coretoolkit"
+          install_dir="$PWD/.ci-install"
+          mkdir -p "$install_dir"
 
           conan export "$coretoolkit_dir"
 
@@ -97,8 +85,7 @@ jobs:
             while IFS= read -r dependency_repo; do
               dependency_repo="$(printf '%s' "$dependency_repo" | xargs)"
               [[ -z "$dependency_repo" ]] && continue
-
-              dependency_dir="$root_dir/$(basename "$dependency_repo")"
+              dependency_dir="$PWD/$(basename "$dependency_repo")"
               git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY_OWNER}/${dependency_repo}" "$dependency_dir"
               conan export "$dependency_dir"
             done <<'EOF'
@@ -138,89 +125,55 @@ jobs:
           cmake --build "$build_dir" --config Release --parallel
           cmake --install "$build_dir" --config Release
 
-          archive_path="$archive_dir/${package_name}-${os_slug}-${arch_slug}.tar.gz"
-          metadata_path="$archive_dir/metadata.json"
-          checksum_path="$archive_path.sha256"
-          archive_relative_path=".ci-output/archive/${package_name}-${os_slug}-${arch_slug}.tar.gz"
-          metadata_relative_path=".ci-output/archive/metadata.json"
-          checksum_relative_path="$archive_relative_path.sha256"
+          echo "install_dir=$install_dir" >> "$GITHUB_OUTPUT"
+          echo "plugin_dir=$plugin_dir" >> "$GITHUB_OUTPUT"
 
-          export INSTALL_DIR="$install_dir"
-          export ARCHIVE_PATH="$archive_path"
-          export METADATA_PATH="$metadata_path"
-          export CHECKSUM_PATH="$checksum_path"
-          export PLUGIN_REPO="$plugin_repo"
-          export PACKAGE_NAME="$package_name"
-          export OS_SLUG="$os_slug"
-          export ARCH_SLUG="$arch_slug"
-          export GITHUB_SOURCE_REPO="$GITHUB_REPOSITORY"
-          export GITHUB_SOURCE_REF="$GITHUB_REF_NAME"
-          export GITHUB_SOURCE_SHA="$GITHUB_SHA"
-
-          python - <<'PYCODE'
-          import hashlib
-          import json
-          import os
-          import tarfile
-          from pathlib import Path
-
-          install_dir = Path(os.environ['INSTALL_DIR'])
-          archive_path = Path(os.environ['ARCHIVE_PATH'])
-          metadata_path = Path(os.environ['METADATA_PATH'])
-          checksum_path = Path(os.environ['CHECKSUM_PATH'])
-
-          metadata = {
-              'plugin_repository': os.environ['PLUGIN_REPO'],
-              'package_name': os.environ['PACKAGE_NAME'],
-              'os': os.environ['OS_SLUG'],
-              'arch': os.environ['ARCH_SLUG'],
-              'source_repository': os.environ['GITHUB_SOURCE_REPO'],
-              'source_ref': os.environ['GITHUB_SOURCE_REF'],
-              'source_sha': os.environ['GITHUB_SOURCE_SHA'],
-          }
-          metadata_path.write_text(json.dumps(metadata, indent=2) + '\\n', encoding='utf-8')
-
-          with tarfile.open(archive_path, 'w:gz') as tar:
-              tar.add(install_dir, arcname=os.environ['PLUGIN_REPO'])
-              tar.add(metadata_path, arcname=f"{os.environ['PLUGIN_REPO']}/metadata.json")
-
-          digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-          checksum_path.write_text(f"{digest}  {archive_path.name}\\n", encoding='utf-8')
-          PYCODE
-
-          echo "immutable_ref=$immutable_ref" >> "$GITHUB_OUTPUT"
-          echo "release_ref=$release_ref" >> "$GITHUB_OUTPUT"
-          echo "archive_path=$archive_relative_path" >> "$GITHUB_OUTPUT"
-          echo "metadata_path=$metadata_relative_path" >> "$GITHUB_OUTPUT"
-          echo "checksum_path=$checksum_relative_path" >> "$GITHUB_OUTPUT"
-
-      - name: Log in to GHCR
+      - name: Bundle plugin
+        id: bundle
         shell: bash
         env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
+          PLUGIN_DIR: ${{ steps.build.outputs.plugin_dir }}
+          INSTALL_DIR: ${{ steps.build.outputs.install_dir }}
+          OS_SLUG: ${{ matrix.os_slug }}
+          ARCH_SLUG: ${{ matrix.arch_slug }}
         run: |
           set -euo pipefail
-          printf '%s' "$GHCR_TOKEN" | oras login ghcr.io --username "$GHCR_USER" --password-stdin
+          mkdir -p artifacts
+          python "$GITHUB_WORKSPACE/coretoolkit/.github/scripts/build_plugin_bundle.py" \
+            --plugin-dir "$PLUGIN_DIR" \
+            --install-dir "$INSTALL_DIR" \
+            --os "$OS_SLUG" \
+            --arch "$ARCH_SLUG" \
+            --output-dir "$PWD/artifacts"
 
-      - name: Publish bundle to GHCR
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Upload bundle artifact
+        if: steps.bundle.outputs.plugin_key != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os_slug }}-${{ matrix.arch_slug }}
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: error
 
-          refs=('${{ steps.build.outputs.immutable_ref }}')
-          if [[ -n '${{ steps.build.outputs.release_ref }}' ]]; then
-            refs+=('${{ steps.build.outputs.release_ref }}')
-          fi
+  release:
+    name: Publish release
+    needs: build
+    if: needs.build.outputs.plugin_key != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bundle-*
+          merge-multiple: true
 
-          for ref in "${refs[@]}"; do
-            oras push "$ref" \
-              --artifact-type application/vnd.voltlabs.plugin.binary.v1 \
-              --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
-              --annotation "org.opencontainers.image.revision=${{ github.sha }}" \
-              --annotation "org.opencontainers.image.title=${{ inputs.plugin_name }} binary bundle" \
-              --annotation "org.opencontainers.image.version=${{ github.ref_name }}" \
-              "${{ steps.build.outputs.archive_path }}:application/vnd.voltlabs.plugin.binary.layer.v1.tar+gzip" \
-              "${{ steps.build.outputs.checksum_path }}:text/plain" \
-              "${{ steps.build.outputs.metadata_path }}:application/json"
-          done
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.plugin_version }}
+          name: ${{ needs.build.outputs.plugin_key }} v${{ needs.build.outputs.plugin_version }}
+          files: artifacts/*
+          fail_on_unmatched_files: false

@@ -23,18 +23,18 @@ has_flag() {
 case "${plugin}" in
     opendxa)
         default_lattice_dir="${VOLT_DEFAULT_LATTICE_DIR:-/opt/volt/share/volt/lattices}"
-        if ! has_flag "--lattice-dir"; then
-            args+=(--lattice-dir "${default_lattice_dir}")
+        if ! has_flag "--lattice_dir"; then
+            args+=(--lattice_dir "${default_lattice_dir}")
         fi
         ;;
     pattern-structure-matching)
         default_pattern_lattice_dir="${VOLT_DEFAULT_PATTERN_LATTICE_DIR:-/opt/volt/share/volt/pattern-structure-matching/lattices}"
         default_reference_lattice_dir="${VOLT_DEFAULT_REFERENCE_LATTICE_DIR:-/opt/volt/share/volt/lattices}"
-        if ! has_flag "--lattice-dir"; then
-            args+=(--lattice-dir "${default_pattern_lattice_dir}")
+        if ! has_flag "--lattice_dir"; then
+            args+=(--lattice_dir "${default_pattern_lattice_dir}")
         fi
-        if ! has_flag "--reference-lattice-dir"; then
-            args+=(--reference-lattice-dir "${default_reference_lattice_dir}")
+        if ! has_flag "--reference_lattice_dir"; then
+            args+=(--reference_lattice_dir "${default_reference_lattice_dir}")
         fi
         ;;
 esac

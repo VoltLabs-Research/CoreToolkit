@@ -1,10 +1,12 @@
 #include <volt/core/lammps_parser.h>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <iomanip>
 #include <cstring>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -71,6 +73,21 @@ inline std::string trimCopy(std::string_view text){
 
 inline std::string lineToString(const LineView& line){
     return std::string(line.begin, static_cast<std::size_t>(line.end - line.begin));
+}
+
+inline std::string toLowerCopy(std::string text){
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c){
+        return static_cast<char>(std::tolower(c));
+    });
+    return text;
+}
+
+inline std::string stripCommentCopy(std::string_view text){
+    const std::size_t comment = text.find('#');
+    if(comment != std::string_view::npos){
+        text = text.substr(0, comment);
+    }
+    return trimCopy(text);
 }
 
 inline const char* skipSpaces(const char* p, const char* end){
@@ -979,6 +996,220 @@ inline const char* parseAtomLine(
     return p;
 }
 
+inline bool parseHeaderIntValue(const std::string& line, std::string_view suffix, int& value){
+    const std::string clean = stripCommentCopy(line);
+    if(clean.empty()) return false;
+
+    std::istringstream ss(clean);
+    int parsed = 0;
+    std::string word;
+    if(!(ss >> parsed >> word)){
+        return false;
+    }
+
+    if(toLowerCopy(word) != suffix){
+        return false;
+    }
+
+    value = parsed;
+    return true;
+}
+
+inline bool parseDataBoundsLine(
+    const std::string& line,
+    const char* lowName,
+    const char* highName,
+    double& lo,
+    double& hi
+){
+    const std::string clean = stripCommentCopy(line);
+    if(clean.empty()) return false;
+
+    std::istringstream ss(clean);
+    std::string lowToken;
+    std::string highToken;
+    double parsedLo = 0.0;
+    double parsedHi = 0.0;
+    if(!(ss >> parsedLo >> parsedHi >> lowToken >> highToken)){
+        return false;
+    }
+
+    if(toLowerCopy(lowToken) != lowName || toLowerCopy(highToken) != highName){
+        return false;
+    }
+
+    lo = parsedLo;
+    hi = parsedHi;
+    return true;
+}
+
+inline bool parseDataTiltLine(const std::string& line, double& xy, double& xz, double& yz){
+    const std::string clean = stripCommentCopy(line);
+    if(clean.empty()) return false;
+
+    std::istringstream ss(clean);
+    std::string xyToken;
+    std::string xzToken;
+    std::string yzToken;
+    double parsedXy = 0.0;
+    double parsedXz = 0.0;
+    double parsedYz = 0.0;
+    if(!(ss >> parsedXy >> parsedXz >> parsedYz >> xyToken >> xzToken >> yzToken)){
+        return false;
+    }
+
+    if(toLowerCopy(xyToken) != "xy" || toLowerCopy(xzToken) != "xz" || toLowerCopy(yzToken) != "yz"){
+        return false;
+    }
+
+    xy = parsedXy;
+    xz = parsedXz;
+    yz = parsedYz;
+    return true;
+}
+
+inline std::string parseDataSectionName(const std::string& line){
+    const std::string clean = stripCommentCopy(line);
+    if(clean.empty()) return {};
+
+    std::istringstream ss(clean);
+    std::string section;
+    ss >> section;
+    return toLowerCopy(section);
+}
+
+inline std::string parseAtomsStyle(const std::string& line){
+    const std::size_t comment = line.find('#');
+    if(comment == std::string::npos){
+        return {};
+    }
+    return toLowerCopy(trimCopy(std::string_view(line).substr(comment + 1)));
+}
+
+inline std::string dataAtomsHeaderForStyle(const std::string& style){
+    const std::string normalized = toLowerCopy(style);
+    if(normalized == "charge"){
+        return "ITEM: ATOMS id type q x y z";
+    }
+    if(normalized == "molecular" || normalized == "bond" || normalized == "angle"){
+        return "ITEM: ATOMS id molecule_id type x y z";
+    }
+    if(normalized == "full"){
+        return "ITEM: ATOMS id molecule_id type q x y z";
+    }
+    return "ITEM: ATOMS id type x y z";
+}
+
+inline bool parseLammpsDataStream(std::istream& in, LammpsParser::Frame& frame){
+    std::string line;
+    int natoms = -1;
+    int atomTypes = -1;
+    double xlo = 0.0, xhi = 0.0;
+    double ylo = 0.0, yhi = 0.0;
+    double zlo = 0.0, zhi = 0.0;
+    double xy = 0.0, xz = 0.0, yz = 0.0;
+    bool haveX = false, haveY = false, haveZ = false;
+    std::string atomsStyle;
+    bool foundAtoms = false;
+
+    while(std::getline(in, line)){
+        const std::string section = parseDataSectionName(line);
+        if(section == "atoms"){
+            atomsStyle = parseAtomsStyle(line);
+            foundAtoms = true;
+            break;
+        }
+
+        if(parseHeaderIntValue(line, "atoms", natoms)){
+            continue;
+        }
+        if(parseHeaderIntValue(line, "atom", atomTypes)){
+            continue;
+        }
+        if(parseDataBoundsLine(line, "xlo", "xhi", xlo, xhi)){
+            haveX = true;
+            continue;
+        }
+        if(parseDataBoundsLine(line, "ylo", "yhi", ylo, yhi)){
+            haveY = true;
+            continue;
+        }
+        if(parseDataBoundsLine(line, "zlo", "zhi", zlo, zhi)){
+            haveZ = true;
+            continue;
+        }
+        parseDataTiltLine(line, xy, xz, yz);
+    }
+
+    if(!foundAtoms || natoms <= 0 || !haveX || !haveY || !haveZ){
+        return false;
+    }
+
+    frame.timestep = 0;
+    frame.natoms = natoms;
+    frame.positions.resize(static_cast<std::size_t>(natoms));
+    frame.types.resize(static_cast<std::size_t>(natoms));
+    frame.ids.resize(static_cast<std::size_t>(natoms));
+    frame.headerOrder.clear();
+    frame.headerProperties.clear();
+    frame.atomProperties.clear();
+    frame.atomColumnOrder.clear();
+    frame.atomColumnsScaled = false;
+
+    if(atomTypes >= 0){
+        frame.headerOrder.push_back("atom types");
+        frame.headerProperties["atom types"] = std::to_string(atomTypes);
+    }
+    if(!atomsStyle.empty()){
+        frame.headerOrder.push_back("atom style");
+        frame.headerProperties["atom style"] = atomsStyle;
+    }
+
+    const Vector3 a(xhi - xlo, 0.0, 0.0);
+    const Vector3 b(xy, yhi - ylo, 0.0);
+    const Vector3 c(xz, yz, zhi - zlo);
+    const Point3 origin(xlo, ylo, zlo);
+    frame.simulationCell.setMatrix(AffineTransformation(a, b, c, origin - Point3::Origin()));
+    frame.simulationCell.setPbcFlags(true, true, true);
+
+    const std::string atomHeader = dataAtomsHeaderForStyle(atomsStyle);
+    LineView headerLine{
+        .begin = atomHeader.data(),
+        .end = atomHeader.data() + atomHeader.size()
+    };
+    const AtomColumns cols = parseAtomColumns(headerLine);
+    if(!cols.valid){
+        return false;
+    }
+    initializeExtraAtomColumns(cols, frame);
+
+    CellMatrix cell{};
+    int atomIndex = 0;
+    while(atomIndex < natoms && std::getline(in, line)){
+        const std::string clean = stripCommentCopy(line);
+        if(clean.empty()){
+            continue;
+        }
+
+        const std::string section = parseDataSectionName(clean);
+        if(section == "velocities" || section == "bonds" || section == "angles" ||
+           section == "dihedrals" || section == "impropers" || section == "masses"){
+            break;
+        }
+
+        const char* begin = clean.data();
+        const char* end = begin + clean.size();
+        bool ok = true;
+        parseAtomLine(begin, end, cols, cell, frame, static_cast<std::size_t>(atomIndex), ok);
+        if(!ok){
+            return false;
+        }
+        ++atomIndex;
+    }
+
+    return atomIndex == natoms;
+}
+
 #if defined(__unix__) || defined(__APPLE__)
 class MappedFile{
 public:
@@ -1207,7 +1438,9 @@ bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
 #if defined(__unix__) || defined(__APPLE__)
     MappedFile mapped(filename);
     if(mapped.valid()){
-        return parseMapped(mapped.data(), mapped.size(), frame);
+        if(parseMapped(mapped.data(), mapped.size(), frame)){
+            return true;
+        }
     }
 #endif
 
@@ -1217,7 +1450,13 @@ bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
         return false;
     }
 
-    return parseStream(file, frame);
+    if(parseStream(file, frame)){
+        return true;
+    }
+
+    file.clear();
+    file.seekg(0, std::ios::beg);
+    return parseLammpsDataStream(file, frame);
 }
 
 bool LammpsParser::writeFile(const std::string& filename, const Frame& frame){

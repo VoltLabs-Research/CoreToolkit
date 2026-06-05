@@ -1,6 +1,7 @@
 #pragma once
 
 #include <volt/plugin/plugin_main.h>
+#include <volt/structures/crystal_structure_types.h>
 #include <functional>
 #include <optional>
 #include <string>
@@ -60,6 +61,20 @@ OptionBinding<S> opt(const char* name, const char* help, const char* def, void(S
 template<typename S>
 OptionBinding<S> opt(CliOption meta, std::function<void(S&, const OptsMap&)> fn) {
     return {std::move(meta), std::move(fn)};
+}
+
+template<typename S>
+OptionBinding<S> optLattice(const char* name, const char* allowed, const char* def,
+                            void(S::*setter)(LatticeStructureType)) {
+    return {
+        {name, "string", allowed, def},
+        [setter, name, dv = std::string(def)](S& s, const OptsMap& opts) {
+            LatticeStructureType t{};
+            parseLatticeStructureType(dv, t);
+            parseLatticeStructureType(CLI::getString(opts, name, dv), t);
+            (s.*setter)(t);
+        }
+    };
 }
 
 inline std::optional<json> requireOptions(const OptsMap& opts, std::initializer_list<const char*> required) {

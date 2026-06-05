@@ -9,6 +9,19 @@
 
 namespace Volt::Plugin {
 
+namespace Detail {
+inline std::string formatDefault(double v) {
+    std::string s = std::to_string(v);
+    auto dot = s.find('.');
+    if (dot != std::string::npos) {
+        auto last = s.find_last_not_of('0');
+        if (last == dot) ++last;
+        s.erase(last + 1);
+    }
+    return s;
+}
+} // namespace Detail
+
 template<typename Service>
 struct OptionBinding {
     CliOption meta;
@@ -26,14 +39,14 @@ OptionBinding<S> opt(const char* name, const char* help, T def, void(S::*setter)
         };
     } else if constexpr (std::is_same_v<T, float>) {
         return {
-            {name, "float", help, std::to_string(def)},
+            {name, "float", help, Detail::formatDefault(static_cast<double>(def))},
             [setter, name, def](S& s, const OptsMap& opts) {
                 (s.*setter)(static_cast<float>(CLI::getDouble(opts, name, static_cast<double>(def))));
             }
         };
     } else if constexpr (std::is_same_v<T, double>) {
         return {
-            {name, "float", help, std::to_string(def)},
+            {name, "float", help, Detail::formatDefault(def)},
             [setter, name, def](S& s, const OptsMap& opts) {
                 (s.*setter)(CLI::getDouble(opts, name, def));
             }

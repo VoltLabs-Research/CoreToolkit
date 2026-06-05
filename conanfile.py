@@ -1,3 +1,4 @@
+import os
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
 
@@ -15,7 +16,7 @@ class CoreToolkitConan(ConanFile):
         "nlohmann_json/3.11.3",
     )
     default_options = {"hwloc/*:shared": True}
-    exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*"
+    exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "cmake/*"
 
     def layout(self):
         cmake_layout(self)
@@ -43,3 +44,6 @@ class CoreToolkitConan(ConanFile):
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",
         ]
+        self.cpp_info.set_property("cmake_build_modules", [
+            os.path.join(self.package_folder, "lib", "cmake", "coretoolkit", "VoltPlugin.cmake")
+        ])

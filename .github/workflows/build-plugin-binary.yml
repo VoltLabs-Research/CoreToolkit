@@ -206,16 +206,8 @@ jobs:
       - name: Install vpm
         run: npm install -g @voltstack/vpm
 
-      - name: Generate vpm.json from plugin.json
-        run: |
-          jq -n --slurpfile p plugin/plugin.json '
-            ($p[0].workflow.nodes[] | select(.type == "modifier").data.modifier) as $m
-            | { name: "@voltlabs/\($m.key)", version: $m.version, kind: "workflow",
-                publisher: "voltlabs", license: $m.license, homepage: $m.homepage,
-                description: $m.description,
-                platforms: ["linux-x86_64", "darwin-arm64", "windows-x86_64"] }
-            | with_entries(select(.value != null))
-          ' > plugin/vpm.json
+      - name: Verify committed vpm.json
+        run: test -f plugin/vpm.json || { echo "::error::plugin/vpm.json is required (the registry manifest is no longer generated)"; exit 1; }
 
       - name: Publish to registry
         env:

@@ -82,6 +82,7 @@ function(volt_add_plugin PLUGIN_NAME)
 
     add_library(${PLUGIN_NAME}_lib STATIC ${_ALL_SOURCES})
     set_target_properties(${PLUGIN_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(${PLUGIN_NAME}_lib PUBLIC cxx_std_23)
 
     set(_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/include)
     if(ARG_INCLUDE_DIRS)

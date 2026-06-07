@@ -179,3 +179,50 @@ jobs:
           name: ${{ needs.build.outputs.plugin_key }} v${{ needs.build.outputs.plugin_version }}
           files: artifacts/*
           fail_on_unmatched_files: false
+
+  publish:
+    name: Publish to registry
+    needs: build
+    if: needs.build.outputs.plugin_key != '' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out plugin repository
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: bundle-*
+          merge-multiple: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install vpm
+        run: npm install -g @voltstack/vpm
+
+      - name: Generate vpm.json from plugin.json
+        run: |
+          jq -n --slurpfile p plugin/plugin.json '
+            ($p[0].workflow.nodes[] | select(.type == "modifier").data.modifier) as $m
+            | { name: "@voltlabs/\($m.key)", version: $m.version, kind: "workflow",
+                publisher: "voltlabs", license: $m.license, homepage: $m.homepage,
+                description: $m.description,
+                platforms: ["linux-x86_64", "darwin-arm64", "windows-x86_64"] }
+            | with_entries(select(.value != null))
+          ' > plugin/vpm.json
+
+      - name: Publish to registry
+        env:
+          VPM_NO_KEYRING: '1'
+          VPM_PUBLISH_TOKEN: ${{ secrets.VPM_PUBLISH_TOKEN }}
+        run: |
+          vpm publish plugin --token "$VPM_PUBLISH_TOKEN" \
+            --bundle linux-x86_64=$(ls artifacts/*-linux-x86_64.tar.zst) \
+            --bundle darwin-arm64=$(ls artifacts/*-darwin-arm64.tar.zst) \
+            --bundle windows-x86_64=$(ls artifacts/*-windows-x86_64.tar.zst)

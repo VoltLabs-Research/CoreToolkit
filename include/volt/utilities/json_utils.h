@@ -78,7 +78,9 @@ public:
         return static_cast<uint32_t>(n);
     }
 
-private:
+    // Recursively serialize an nlohmann::json value through a MsgpackWriter.
+    // Exposed so streaming serializers can embed json subtrees (e.g. listing
+    // sub-listings) without building a full DOM for the whole document.
     static void writeJsonAsMsgpack(MsgpackWriter& writer, const json& data, bool sortKeys);
 };
 

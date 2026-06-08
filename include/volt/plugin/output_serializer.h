@@ -17,6 +17,7 @@ struct OutputConfig {
     std::string summaryFileSuffix;
     BucketResolver bucketResolver;
     AtomExtraFieldWriter atomFieldWriter;
+    PerAtomPropertyWriter perAtomFieldWriter;
 };
 
 inline void serializePluginOutput(
@@ -36,7 +37,7 @@ inline void serializePluginOutput(
 
     if (config.bucketResolver) {
         const std::string atomsPath = outputBase + "_atoms.msgpack";
-        streamAtomsToFile(atomsPath, frame, config.bucketResolver, config.atomFieldWriter);
+        streamAtomsToFile(atomsPath, frame, config.bucketResolver, config.atomFieldWriter, config.perAtomFieldWriter);
         spdlog::info("Exported atoms data to: {}", atomsPath);
     }
 }

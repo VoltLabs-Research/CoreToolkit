@@ -160,7 +160,7 @@ jobs:
   release:
     name: Publish release
     needs: build
-    if: needs.build.outputs.plugin_key != ''
+    if: needs.build.outputs.plugin_key != '' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write

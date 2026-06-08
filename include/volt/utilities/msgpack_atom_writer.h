@@ -19,6 +19,13 @@ using BucketResolver = std::function<std::string(std::size_t atomIndex)>;
 // Must set extraCount to the exact number of key/value pairs written.
 using AtomExtraFieldWriter = std::function<void(MsgpackWriter& w, std::size_t atomIndex, int& extraCount)>;
 
+// Writes the per-atom-properties record fields for an atom (the scalar/vector
+// coloring set surfaced in the canvas). When supplied to streamAtomsToFile it
+// REPLACES the default structure_id/structure_name/cluster_id fields; only the
+// leading atom "id" key is kept. Must set count to the exact number of
+// key/value pairs written.
+using PerAtomPropertyWriter = std::function<void(MsgpackWriter& w, std::size_t atomIndex, int& count)>;
+
 // Streams an _atoms.msgpack file directly without building a JSON DOM.
 // Produces the canonical AtomisticExporter format consumed by the Volt viewer:
 //   { main_listing, sub_listings, export: { AtomisticExporter: { bucket: [...] } } }
@@ -29,7 +36,8 @@ inline void streamAtomsToFile(
     const std::string& filePath,
     const LammpsParser::Frame& frame,
     BucketResolver resolveBucket,
-    AtomExtraFieldWriter writeExtraFields = {}
+    AtomExtraFieldWriter writeExtraFields = {},
+    PerAtomPropertyWriter writePerAtomProperties = {}
 ){
     const std::size_t natoms = static_cast<std::size_t>(frame.natoms);
 
@@ -118,16 +126,38 @@ inline void streamAtomsToFile(
 
     w.write_key("per-atom-properties");
     w.write_array_header(static_cast<uint32_t>(natoms));
-    for(std::size_t i = 0; i < natoms; ++i){
-        w.write_map_header(static_cast<uint32_t>(4 + extraFields));
-        w.write_key("id");
-        w.write_int(i < frame.ids.size() ? frame.ids[i] : static_cast<int>(i));
-        w.write_key("structure_id"); w.write_int(atomBucketId[i]);
-        w.write_key("structure_name"); w.write_str(*bucketNameById[atomBucketId[i]]);
-        w.write_key("cluster_id"); w.write_int(0);
-        if(writeExtraFields){
+    if(writePerAtomProperties){
+        // Plugin-defined per-atom-properties: keep only the leading atom id and
+        // let the plugin emit the meaningful fields (e.g. csp / coordination /
+        // cluster_id) without the generic structure_id/structure_name base.
+        int perAtomFieldCount = 0;
+        if(natoms > 0){
+            struct NullBufPA : std::streambuf{
+                int overflow(int c) override{ return c; }
+            } nullBufPA;
+            std::ostream nullStreamPA(&nullBufPA);
+            MsgpackWriter probePA(nullStreamPA);
+            writePerAtomProperties(probePA, 0, perAtomFieldCount);
+        }
+        for(std::size_t i = 0; i < natoms; ++i){
+            w.write_map_header(static_cast<uint32_t>(1 + perAtomFieldCount));
+            w.write_key("id");
+            w.write_int(i < frame.ids.size() ? frame.ids[i] : static_cast<int>(i));
             int dummy = 0;
-            writeExtraFields(w, i, dummy);
+            writePerAtomProperties(w, i, dummy);
+        }
+    }else{
+        for(std::size_t i = 0; i < natoms; ++i){
+            w.write_map_header(static_cast<uint32_t>(4 + extraFields));
+            w.write_key("id");
+            w.write_int(i < frame.ids.size() ? frame.ids[i] : static_cast<int>(i));
+            w.write_key("structure_id"); w.write_int(atomBucketId[i]);
+            w.write_key("structure_name"); w.write_str(*bucketNameById[atomBucketId[i]]);
+            w.write_key("cluster_id"); w.write_int(0);
+            if(writeExtraFields){
+                int dummy = 0;
+                writeExtraFields(w, i, dummy);
+            }
         }
     }
 

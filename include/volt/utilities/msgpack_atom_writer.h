@@ -56,7 +56,7 @@ inline void streamAtomsToFile(
     std::ofstream of(filePath, std::ios::binary);
     MsgpackWriter w(of);
 
-    w.write_map_header(3);
+    w.write_map_header(4);
 
     w.write_key("main_listing");
     w.write_map_header(2);
@@ -101,6 +101,34 @@ inline void streamAtomsToFile(
             }
         }
         ++bucketId;
+    }
+
+    // per-atom-properties: flat array indexed by atom, carrying scalar fields for /canvas coloring
+    std::vector<int> atomBucketId(natoms, 0);
+    std::vector<const std::string*> bucketNameById;
+    bucketNameById.reserve(numBuckets);
+    {
+        int bid = 0;
+        for(const auto& [name, indices] : bucketAtoms){
+            bucketNameById.push_back(&name);
+            for(std::size_t i : indices) atomBucketId[i] = bid;
+            ++bid;
+        }
+    }
+
+    w.write_key("per-atom-properties");
+    w.write_array_header(static_cast<uint32_t>(natoms));
+    for(std::size_t i = 0; i < natoms; ++i){
+        w.write_map_header(static_cast<uint32_t>(4 + extraFields));
+        w.write_key("id");
+        w.write_int(i < frame.ids.size() ? frame.ids[i] : static_cast<int>(i));
+        w.write_key("structure_id"); w.write_int(atomBucketId[i]);
+        w.write_key("structure_name"); w.write_str(*bucketNameById[atomBucketId[i]]);
+        w.write_key("cluster_id"); w.write_int(0);
+        if(writeExtraFields){
+            int dummy = 0;
+            writeExtraFields(w, i, dummy);
+        }
     }
 
     of.flush();

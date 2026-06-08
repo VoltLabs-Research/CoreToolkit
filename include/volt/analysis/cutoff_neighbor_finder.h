@@ -16,8 +16,6 @@ private:
         Point3 pos;
         // The offset applied to the particle when wrapping it at periodic boundaries
         Vector_3<int8_t> pbcShift;
-        // Pointer to next particle in linked list
-        const NeighborListParticle* nextInBin;
     };
 
 public:
@@ -92,7 +90,8 @@ public:
         std::vector<Vector3I>::const_iterator _stencilIter;
         Point3I _centerBin;
         Point3I _currentBin;
-        const NeighborListParticle* _neighbor;
+        uint32_t _binCursor;
+        uint32_t _binEnd;
         size_t _neighborIndex;
         Vector_3<int8_t> _pbcShift;
         Vector3 _delta;
@@ -115,8 +114,10 @@ private:
     // The internal list of particles
     std::vector<NeighborListParticle> particles;
 
-    // An 3d array of cubic bins. Each bin is a linked list of particles.
-    std::vector<const NeighborListParticle*> bins;
+    // Contiguous bins (counting-sort layout): binnedIndices holds particle
+    // indices grouped by bin; [binStart[b], binStart[b+1]) is bin b's range.
+    std::vector<uint32_t> binStart;
+    std::vector<uint32_t> binnedIndices;
 
     // The list of adjacent cells to visit while finding
     // the neighbors of a central particle

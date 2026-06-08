@@ -1,5 +1,8 @@
 #include <volt/analysis/cutoff_neighbor_finder.h>
 
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
+
 namespace Volt{
 
 bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positions, const SimulationCell& cellData){
@@ -109,47 +112,57 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
         if(stencil.size() == oldCount) break;
     }
 
-    // An 3d array of cubic bins.
-    // Each bin is a linked list of particles
-    bins.resize(binCount, nullptr);
-
-    // Sort particles into bins
-    particles.resize(positions->size());
+    // Sort particles into a contiguous counting-sort layout instead of per-bin
+    // linked lists. The per-atom wrap + bin assignment is independent, so it
+    // runs in parallel; within a bin we keep indices highest-first to match the
+    // previous linked-list (prepend) order, so neighbor queries stay identical.
+    const size_t N = positions->size();
+    particles.resize(N);
+    std::vector<uint32_t> binOf(N);
     const Point3* p = positions->constDataPoint3();
-    for(size_t pindex = 0; pindex < particles.size(); pindex++, ++p){
-        NeighborListParticle& a = particles[pindex];
-        a.pos = *p;
-        a.pbcShift.setZero();
 
-        // Determine the bin the atom is located in
-        Point3 rp = reciprocalBinCell * (*p);
-        Point3I binLocation;
-        for(size_t k = 0; k < 3; k++){
-            binLocation[k] = (int)floor(rp[k]);
-            if(simCell.pbcFlags()[k]){
-                if(binLocation[k] < 0 || binLocation[k] >= binDim[k]){
-                    int shift;
-                    if(binLocation[k] < 0){
-                        shift = -(binLocation[k] + 1) / binDim[k] + 1;
-                    }else{
-                        shift = -binLocation[k] / binDim[k];
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, N), [&](const tbb::blocked_range<size_t>& r){
+        for(size_t pindex = r.begin(); pindex < r.end(); ++pindex){
+            NeighborListParticle& a = particles[pindex];
+            a.pos = p[pindex];
+            a.pbcShift.setZero();
+
+            // Determine the bin the atom is located in
+            Point3 rp = reciprocalBinCell * p[pindex];
+            Point3I binLocation;
+            for(size_t k = 0; k < 3; k++){
+                binLocation[k] = (int)floor(rp[k]);
+                if(simCell.pbcFlags()[k]){
+                    if(binLocation[k] < 0 || binLocation[k] >= binDim[k]){
+                        int shift = (binLocation[k] < 0)
+                            ? (-(binLocation[k] + 1) / binDim[k] + 1)
+                            : (-binLocation[k] / binDim[k]);
+                        a.pbcShift[k] = (int8_t)shift;
+                        a.pos += (double)shift * simCell.matrix().column(k);
+                        binLocation[k] = SimulationCell::modulo(binLocation[k], binDim[k]);
                     }
-					a.pbcShift[k] = (int8_t)shift;
-					a.pos += (double)shift * simCell.matrix().column(k);
-					binLocation[k] = SimulationCell::modulo(binLocation[k], binDim[k]);
+                }else if(binLocation[k] < 0){
+                    binLocation[k] = 0;
+                }else if(binLocation[k] >= binDim[k]){
+                    binLocation[k] = binDim[k] - 1;
                 }
-            }else if(binLocation[k] < 0){
-                binLocation[k] = 0;
-            }else if(binLocation[k] >= binDim[k]){
-                binLocation[k] = binDim[k] - 1;
+                assert(binLocation[k] >= 0 && binLocation[k] < binDim[k]);
             }
-            assert(binLocation[k] >= 0 && binLocation[k] < binDim[k]);
+            binOf[pindex] = (uint32_t)(binLocation[0] + binLocation[1] * binDim[0] + binLocation[2] * binDim[0] * binDim[1]);
         }
+    });
 
-        // Put particle into its bin
-        size_t binIndex = binLocation[0] + binLocation[1] * binDim[0] + binLocation[2] * binDim[0] * binDim[1];
-        a.nextInBin = bins[binIndex];
-        bins[binIndex] = &a;
+    // Counting sort: histogram of bin sizes -> prefix sum -> scatter.
+    binStart.assign((size_t)binCount + 1, 0);
+    for(size_t i = 0; i < N; i++) binStart[binOf[i] + 1]++;
+    for(int b = 0; b < binCount; b++) binStart[b + 1] += binStart[b];
+
+    binnedIndices.resize(N);
+    std::vector<uint32_t> writePos(binStart.begin(), binStart.end() - 1);
+    // Iterate descending so each bin's lowest offset gets its highest particle
+    // index, reproducing the linked-list prepend order exactly.
+    for(size_t i = N; i-- > 0; ){
+        binnedIndices[writePos[binOf[i]]++] = (uint32_t)i;
     }
 
     return true;
@@ -160,7 +173,8 @@ CutoffNeighborFinder::Query::Query(const CutoffNeighborFinder& finder, size_t pa
     assert(particleIndex < _builder.particles.size());
     
 	_stencilIter = _builder.stencil.begin();
-	_neighbor = nullptr;
+	_binCursor = 0;
+	_binEnd = 0;
 	_atEnd = false;
 	_center = _builder.particles[particleIndex].pos;
 	_neighborIndex = std::numeric_limits<size_t>::max();
@@ -180,12 +194,13 @@ void CutoffNeighborFinder::Query::next(){
     assert(!_atEnd);
     
     for(;;){
-        while(_neighbor){
-            _delta = _neighbor->pos - _shiftedCenter;
-			_neighborIndex = _neighbor - _builder.particles.data();
-			_neighbor = _neighbor->nextInBin;
-			_distSq = _delta.squaredLength();
-			if(_distSq <= _builder._cutoffRadiusSquared && (_neighborIndex != _centerIndex || _pbcShift != Vector_3<int8_t>::Zero())) return;
+        while(_binCursor < _binEnd){
+            uint32_t idx = _builder.binnedIndices[_binCursor++];
+            const NeighborListParticle& nb = _builder.particles[idx];
+            _delta = nb.pos - _shiftedCenter;
+            _neighborIndex = idx;
+            _distSq = _delta.squaredLength();
+            if(_distSq <= _builder._cutoffRadiusSquared && (_neighborIndex != _centerIndex || _pbcShift != Vector_3<int8_t>::Zero())) return;
         }
 
         for(;;){
@@ -230,7 +245,9 @@ void CutoffNeighborFinder::Query::next(){
 
             ++_stencilIter;
             if(!skipBin){
-				_neighbor = _builder.bins[_currentBin[0] + _currentBin[1] * _builder.binDim[0] + _currentBin[2] * _builder.binDim[0] * _builder.binDim[1]];
+				size_t binIndex = _currentBin[0] + _currentBin[1] * _builder.binDim[0] + _currentBin[2] * _builder.binDim[0] * _builder.binDim[1];
+				_binCursor = _builder.binStart[binIndex];
+				_binEnd = _builder.binStart[binIndex + 1];
                 break;
             }
         }

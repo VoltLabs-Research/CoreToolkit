@@ -65,6 +65,19 @@ jobs:
           python -m pip install --upgrade pip conan zstandard
           conan profile detect --force
 
+      # Arrow (with parquet) has no ConanCenter binary and always compiles from
+      # source (~15 min). Persist the Conan package store between runs so it is
+      # built once per OS and reused. Keyed on CoreToolkit's conanfile so a
+      # dependency/option change invalidates the cache; restore-keys give a warm
+      # partial hit otherwise. Bump the v1 token to force a clean rebuild.
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-v1-${{ matrix.os }}-${{ hashFiles('coretoolkit/conanfile.py') }}
+          restore-keys: |
+            conan-v1-${{ matrix.os }}-
+
       - name: Build plugin
         id: build
         shell: bash
@@ -91,19 +104,28 @@ jobs:
           EOF
           fi
 
-          # The whole stack is C++23; arrow (a CoreToolkit dep) also requires >=17.
-          # Pin cppstd here (plain "23", valid for gcc/clang/MSVC alike) so the
-          # runner's auto-detected compiler default can't drop it below arrow's minimum.
+          # Volt's own C++ (CoreToolkit + the plugin) is C++23 and forces that
+          # standard through CMake (CMAKE_CXX_STANDARD 23 / cxx_std_23), so it
+          # does NOT rely on Conan's cppstd setting. Build the third-party deps
+          # at C++17 instead — it is Arrow 18.1's native standard. Compiling
+          # Arrow in C++23 mode breaks on AppleClang (libc++ promotes the
+          # std::aligned_storage C++23 deprecation into a hard error, which is
+          # what was failing the macOS job); 17 also clears Arrow's minimum on
+          # every compiler, including MSVC (whose detected default is 14).
+          # CoreToolkit is pinned back to 23 so its own package_id stays honest.
+          # Both installs MUST pass identical settings so the cached Arrow /
+          # CoreToolkit binaries from the first install are reused by the second.
+          conan_cppstd_args=(-s compiler.cppstd=17 -s "coretoolkit/*:compiler.cppstd=23")
           conan install --requires="coretoolkit/${coretoolkit_version}" \
             -o "hwloc/*:shared=True" \
             --build=missing \
             -s build_type=Release \
-            -s compiler.cppstd=23
+            "${conan_cppstd_args[@]}"
           conan install "$plugin_dir" \
             -o "hwloc/*:shared=True" \
             --build=missing \
             -s build_type=Release \
-            -s compiler.cppstd=23 \
+            "${conan_cppstd_args[@]}" \
             --output-folder "$plugin_dir/build"
 
           toolchain_path="$(find "$plugin_dir/build" -path '*/generators/conan_toolchain.cmake' | head -n 1)"

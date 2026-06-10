@@ -18,7 +18,7 @@ RUN conan profile detect --force \
         'arch=x86_64'                       \
         'build_type=Release'                \
         'compiler=gcc'                      \
-        'compiler.cppstd=gnu23'             \
+        'compiler.cppstd=gnu17'             \
         'compiler.libcxx=libstdc++11'       \
         'compiler.version=14'               \
         'os=Linux'                          \
@@ -41,8 +41,11 @@ RUN conan export CoreToolkit \
     && conan export PolyhedralTemplateMatching \
     && conan export OpenDXA
 
+# Deps build at the profile's gnu17 (Arrow's native standard); CoreToolkit and
+# the algorithm stay C++23 via their CMake. Pin CoreToolkit's package_id to 23.
 RUN conan install --requires="coretoolkit/1.0.0" \
         -o "hwloc/*:shared=True" \
+        -s "coretoolkit/*:compiler.cppstd=gnu23" \
         --build=missing
 
 ARG ALGORITHM_PATH=plugins/OpenDXA
@@ -55,6 +58,7 @@ RUN rm -rf build/
 
 RUN conan install . \
         -o "hwloc/*:shared=True" \
+        -s "coretoolkit/*:compiler.cppstd=gnu23" \
         --build=missing \
         --output-folder=build
 

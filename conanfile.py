@@ -19,8 +19,22 @@ class CoreToolkitConan(ConanFile):
     default_options = {
         "hwloc/*:shared": True,
         "onetbb/*:shared": False,
+        # We only ever write Parquet (arrow/api.h, arrow/io/file.h,
+        # parquet/arrow/writer.h). Keep Arrow's build minimal: there is no
+        # ConanCenter binary for a parquet-enabled Arrow, so it always compiles
+        # from source here and every extra module is dead weight on the build
+        # clock. These mirror the recipe defaults (so the package_id is
+        # unchanged); they are pinned explicitly to guard against default drift.
         "arrow/*:parquet": True,
         "arrow/*:with_zstd": True,
+        "arrow/*:compute": False,
+        "arrow/*:acero": False,
+        "arrow/*:dataset_modules": False,
+        "arrow/*:gandiva": False,
+        "arrow/*:with_flight_rpc": False,
+        "arrow/*:with_csv": False,
+        "arrow/*:with_json": False,
+        "arrow/*:with_orc": False,
     }
     exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "cmake/*"
 

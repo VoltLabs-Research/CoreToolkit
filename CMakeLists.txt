@@ -44,6 +44,7 @@ find_package(TBB REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(Boost REQUIRED)
+find_package(Arrow REQUIRED)
 
 set(VOLT_BOOST_TARGET "")
 if(TARGET Boost::headers)
@@ -95,6 +96,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	spdlog::spdlog
 	nlohmann_json::nlohmann_json
 	${VOLT_BOOST_TARGET}
+	Arrow::arrow_static
+	Parquet::parquet_static
 	mwm_csp
 	geogram
 )

@@ -14,8 +14,14 @@ class CoreToolkitConan(ConanFile):
         "onetbb/2021.12.0",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
+        "arrow/18.1.0",
     )
-    default_options = {"hwloc/*:shared": True}
+    default_options = {
+        "hwloc/*:shared": True,
+        "onetbb/*:shared": False,
+        "arrow/*:parquet": True,
+        "arrow/*:with_zstd": True,
+    }
     exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "cmake/*"
 
     def layout(self):
@@ -43,6 +49,8 @@ class CoreToolkitConan(ConanFile):
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",
+            "arrow::libarrow",
+            "arrow::libparquet",
         ]
         self.cpp_info.set_property("cmake_build_modules", [
             os.path.join(self.package_folder, "lib", "cmake", "coretoolkit", "VoltPlugin.cmake")

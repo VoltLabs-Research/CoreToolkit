@@ -1,23 +1,24 @@
 #pragma once
 
 #include <volt/utilities/json_utils.h>
-#include <volt/utilities/msgpack_atom_writer.h>
+#include <volt/utilities/parquet_atom_writer.h>
 #include <volt/core/lammps_parser.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <string>
-#include <functional>
 
 namespace Volt::Plugin {
 
 using json = nlohmann::json;
 
 struct OutputConfig {
+    // Suffix for the summary table (e.g. "_cluster_analysis"); empty to skip.
     std::string summaryFileSuffix;
+    // Assigns a bucket name per atom; drives the `bucket`/`structure_*` columns.
     BucketResolver bucketResolver;
-    AtomExtraFieldWriter atomFieldWriter;
-    PerAtomPropertyWriter perAtomFieldWriter;
+    // Emits the plugin's per-atom property columns (coordination, csp, color...).
+    PerAtomColumnWriter perAtomColumnWriter;
 };
 
 inline void serializePluginOutput(
@@ -27,17 +28,17 @@ inline void serializePluginOutput(
     const OutputConfig& config
 ) {
     if (!config.summaryFileSuffix.empty()) {
-        const std::string outputPath = outputBase + config.summaryFileSuffix + ".msgpack";
-        if (JsonUtils::writeJsonMsgpackToFile(result, outputPath, false)) {
-            spdlog::info("Summary msgpack written to {}", outputPath);
+        const std::string outputPath = outputBase + config.summaryFileSuffix + ".parquet";
+        if (JsonUtils::writeJsonToParquet(result, outputPath)) {
+            spdlog::info("Summary parquet written to {}", outputPath);
         } else {
-            spdlog::warn("Could not write summary msgpack: {}", outputPath);
+            spdlog::warn("Could not write summary parquet: {}", outputPath);
         }
     }
 
     if (config.bucketResolver) {
-        const std::string atomsPath = outputBase + "_atoms.msgpack";
-        streamAtomsToFile(atomsPath, frame, config.bucketResolver, config.atomFieldWriter, config.perAtomFieldWriter);
+        const std::string atomsPath = outputBase + "_atoms.parquet";
+        streamAtomsToParquet(atomsPath, frame, config.bucketResolver, config.perAtomColumnWriter);
         spdlog::info("Exported atoms data to: {}", atomsPath);
     }
 }

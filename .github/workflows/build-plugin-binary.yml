@@ -113,19 +113,28 @@ jobs:
           # what was failing the macOS job); 17 also clears Arrow's minimum on
           # every compiler, including MSVC (whose detected default is 14).
           # CoreToolkit is pinned back to 23 so its own package_id stays honest.
-          # Both installs MUST pass identical settings so the cached Arrow /
-          # CoreToolkit binaries from the first install are reused by the second.
-          conan_cppstd_args=(-s compiler.cppstd=17 -s "coretoolkit/*:compiler.cppstd=23")
-          conan install --requires="coretoolkit/${coretoolkit_version}" \
-            -o "hwloc/*:shared=True" \
-            --build=missing \
-            -s build_type=Release \
-            "${conan_cppstd_args[@]}"
-          conan install "$plugin_dir" \
-            -o "hwloc/*:shared=True" \
-            --build=missing \
-            -s build_type=Release \
-            "${conan_cppstd_args[@]}" \
+          #
+          # boost/*:without_stacktrace=True drops Boost's stacktrace libs. We
+          # never use boost::stacktrace, and on Linux boost 1.88 builds
+          # libboost_stacktrace_from_exception.a, which interposes
+          # __cxa_allocate_exception. Linking the plugin with -static-libstdc++
+          # then hits "multiple definition of __cxa_allocate_exception" against
+          # libstdc++.a. Arrow only needs Boost headers (boost::boost), so this
+          # is safe; it also trims the Boost build.
+          #
+          # Both installs MUST pass identical settings/options so the cached
+          # Arrow / CoreToolkit binaries from the first install are reused by the
+          # second.
+          conan_args=(
+            -o "hwloc/*:shared=True"
+            -o "boost/*:without_stacktrace=True"
+            --build=missing
+            -s build_type=Release
+            -s compiler.cppstd=17
+            -s "coretoolkit/*:compiler.cppstd=23"
+          )
+          conan install --requires="coretoolkit/${coretoolkit_version}" "${conan_args[@]}"
+          conan install "$plugin_dir" "${conan_args[@]}" \
             --output-folder "$plugin_dir/build"
 
           toolchain_path="$(find "$plugin_dir/build" -path '*/generators/conan_toolchain.cmake' | head -n 1)"

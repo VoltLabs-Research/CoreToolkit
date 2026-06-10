@@ -19,6 +19,13 @@ class CoreToolkitConan(ConanFile):
     default_options = {
         "hwloc/*:shared": True,
         "onetbb/*:shared": False,
+        # We never use boost::stacktrace. On Linux, boost 1.88 builds
+        # libboost_stacktrace_from_exception.a, which interposes
+        # __cxa_allocate_exception; linking a plugin with -static-libstdc++ then
+        # fails with "multiple definition of __cxa_allocate_exception" against
+        # libstdc++.a. Arrow only needs Boost headers, so dropping the stacktrace
+        # libs is safe (and trims the Boost build).
+        "boost/*:without_stacktrace": True,
         # We only ever write Parquet (arrow/api.h, arrow/io/file.h,
         # parquet/arrow/writer.h). Keep Arrow's build minimal: there is no
         # ConanCenter binary for a parquet-enabled Arrow, so it always compiles

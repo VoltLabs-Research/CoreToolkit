@@ -43,8 +43,11 @@ RUN conan export CoreToolkit \
 
 # Deps build at the profile's gnu17 (Arrow's native standard); CoreToolkit and
 # the algorithm stay C++23 via their CMake. Pin CoreToolkit's package_id to 23.
-RUN conan install --requires="coretoolkit/1.0.0" \
+# boost without_stacktrace avoids the __cxa_allocate_exception multiple-definition
+# clash with -static-libstdc++ (we never use boost::stacktrace).
+RUN conan install --requires="coretoolkit/[>=2.0]" \
         -o "hwloc/*:shared=True" \
+        -o "boost/*:without_stacktrace=True" \
         -s "coretoolkit/*:compiler.cppstd=gnu23" \
         --build=missing
 
@@ -58,6 +61,7 @@ RUN rm -rf build/
 
 RUN conan install . \
         -o "hwloc/*:shared=True" \
+        -o "boost/*:without_stacktrace=True" \
         -s "coretoolkit/*:compiler.cppstd=gnu23" \
         --build=missing \
         --output-folder=build

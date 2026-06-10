@@ -19,13 +19,18 @@ class CoreToolkitConan(ConanFile):
     default_options = {
         "hwloc/*:shared": True,
         "onetbb/*:shared": False,
-        # We never use boost::stacktrace. On Linux, boost 1.88 builds
+        # NOTE: boost/*:without_stacktrace is intentionally NOT set here. It is a
+        # Linux-only fix and is applied per-OS by the build entrypoints instead
+        # (CI conan_args gated on runner.os, Dockerfile.build, scripts/install*.sh
+        # — all Linux). Reason: on Linux, boost 1.88 builds
         # libboost_stacktrace_from_exception.a, which interposes
         # __cxa_allocate_exception; linking a plugin with -static-libstdc++ then
         # fails with "multiple definition of __cxa_allocate_exception" against
-        # libstdc++.a. We only use Boost headers, so dropping the stacktrace libs
-        # is safe (and trims the Boost build).
-        "boost/*:without_stacktrace": True,
+        # libstdc++.a, so we drop the stacktrace libs (we only use Boost headers).
+        # But ConanCenter ships NO prebuilt boost binary with without_stacktrace=True
+        # for ANY OS — setting it globally forced boost to compile from source on
+        # macOS and Windows too. Keeping the default everywhere except Linux lets
+        # macOS/Windows download the prebuilt boost binary.
         # DuckDB is our Parquet engine. Unlike Arrow (no ConanCenter binary for a
         # parquet build -> ~35 min source compile on every OS, and a hard MSVC
         # build failure on Windows), DuckDB ships prebuilt binaries for every CI

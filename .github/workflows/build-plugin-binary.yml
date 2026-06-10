@@ -30,7 +30,13 @@ jobs:
           - os: macos-latest
             os_slug: darwin
             arch_slug: arm64
-          - os: windows-latest
+          # windows-2022 (not windows-latest): ConanCenter publishes prebuilt
+          # binaries for MSVC 194 (VS 2022). windows-latest has begun moving to
+          # newer images whose MSVC (195) has NO prebuilt binaries on ConanCenter,
+          # which forced duckdb/boost/fmt/zlib/onetbb/... to all compile from
+          # source — and duckdb's bundled fmt fails to compile under MSVC 195,
+          # failing the job (so the Conan cache never got saved → every run cold).
+          - os: windows-2022
             os_slug: windows
             arch_slug: x86_64
     outputs:
@@ -65,12 +71,13 @@ jobs:
           python -m pip install --upgrade pip conan zstandard
           conan profile detect --force
 
-      # DuckDB (our Parquet engine) ships prebuilt ConanCenter binaries for every
-      # CI target, so it downloads instead of compiling. The rest of the deps
-      # (boost headers, onetbb, spdlog) are quick. Persist the Conan package store
-      # between runs anyway so warm runs skip even those. Keyed on CoreToolkit's
-      # conanfile so a dependency/option change invalidates the cache; restore-keys
-      # give a warm partial hit otherwise. Bump the v1 token to force a clean rebuild.
+      # All third-party deps (duckdb, boost, onetbb, spdlog, fmt, zlib, ...) have
+      # prebuilt ConanCenter binaries for these pinned CI toolchains, so a clean
+      # run downloads rather than compiling. Persist the Conan package store
+      # between runs anyway so warm runs skip even the export/build of CoreToolkit
+      # itself. Keyed on CoreToolkit's conanfile so a dependency/option change
+      # invalidates the cache; restore-keys give a warm partial hit otherwise.
+      # Bump the v1 token to force a clean rebuild.
       - name: Cache Conan packages
         uses: actions/cache@v4
         with:
@@ -109,30 +116,41 @@ jobs:
           # standard through CMake (CMAKE_CXX_STANDARD 23 / cxx_std_23), so it
           # does NOT rely on Conan's cppstd setting. Build the third-party deps
           # at C++17 instead: it clears every dep's minimum on every compiler
-          # (including MSVC, whose detected default is 14), and DuckDB's prebuilt
-          # ConanCenter binary is available at cppstd=17 on all three OSes, so it
-          # downloads rather than compiling. CoreToolkit is pinned back to 23 so
-          # its own package_id stays honest.
-          #
-          # boost/*:without_stacktrace=True drops Boost's stacktrace libs. We
-          # never use boost::stacktrace, and on Linux boost 1.88 builds
-          # libboost_stacktrace_from_exception.a, which interposes
-          # __cxa_allocate_exception. Linking the plugin with -static-libstdc++
-          # then hits "multiple definition of __cxa_allocate_exception" against
-          # libstdc++.a. We only use Boost headers (boost::boost), so this is
-          # safe; it also trims the Boost build.
-          #
-          # Both installs MUST pass identical settings/options so the cached
-          # DuckDB / CoreToolkit binaries from the first install are reused by the
-          # second.
+          # (including MSVC, whose detected default is 14), and the prebuilt
+          # ConanCenter binaries (duckdb, boost, ...) are available at cppstd=17,
+          # so they download rather than compiling. CoreToolkit is pinned back to
+          # 23 so its own package_id stays honest.
           conan_args=(
             -o "hwloc/*:shared=True"
-            -o "boost/*:without_stacktrace=True"
             --build=missing
             -s build_type=Release
             -s compiler.cppstd=17
             -s "coretoolkit/*:compiler.cppstd=23"
           )
+
+          # boost/*:without_stacktrace=True is a LINUX-ONLY fix. On Linux, boost
+          # 1.88 builds libboost_stacktrace_from_exception.a, which interposes
+          # __cxa_allocate_exception; linking the plugin with -static-libstdc++
+          # then hits "multiple definition of __cxa_allocate_exception" against
+          # libstdc++.a, so we drop the stacktrace libs (we only use Boost
+          # headers). It must NOT be set on macOS/Windows: ConanCenter ships no
+          # prebuilt boost binary with without_stacktrace=True for any OS, so
+          # setting it there forces boost to compile from source. macOS/Windows
+          # have no -static-libstdc++, so they don't need the fix anyway.
+          if [[ '${{ runner.os }}' == 'Linux' ]]; then
+            conan_args+=(-o "boost/*:without_stacktrace=True")
+          fi
+
+          # On Windows, pin MSVC to 194. ConanCenter only publishes prebuilt
+          # binaries for msvc 194 (not 195); if the runner image detects a newer
+          # toolset, every dep would compile from source (and duckdb's bundled fmt
+          # fails to build under MSVC 195). Do NOT set compiler.update — the
+          # published binaries carry no update value, so adding one breaks the
+          # package_id match.
+          if [[ '${{ runner.os }}' == 'Windows' ]]; then
+            conan_args+=(-s "compiler.version=194")
+          fi
+
           conan install --requires="coretoolkit/${coretoolkit_version}" "${conan_args[@]}"
           conan install "$plugin_dir" "${conan_args[@]}" \
             --output-folder "$plugin_dir/build"

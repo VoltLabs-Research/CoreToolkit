@@ -4,7 +4,11 @@ set -euo pipefail
 GITHUB_ORG="${GITHUB_ORG:-https://github.com/VoltLabs-Research}"
 WORK_DIR="${WORK_DIR:-./voltlabs-ecosystem}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
-CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True")
+# boost/*:without_stacktrace=True: we never use boost::stacktrace, and on Linux
+# boost 1.88's libboost_stacktrace_from_exception.a interposes
+# __cxa_allocate_exception, which collides with libstdc++.a under
+# -static-libstdc++. Arrow only needs Boost headers, so dropping it is safe.
+CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True" -o "boost/*:without_stacktrace=True")
 SUPPORTED_CMAKE_VERSION="3.20.0"
 SUPPORTED_CONAN_VERSION="2.0.0"
 APT_UPDATED=0

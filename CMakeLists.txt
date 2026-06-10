@@ -22,7 +22,7 @@
 
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 
-project(coretoolkit VERSION 1.0.0 LANGUAGES CXX)
+project(coretoolkit VERSION 2.0.0 LANGUAGES CXX)
 
 # Force PIC globally so that static libs can be linked into .so
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

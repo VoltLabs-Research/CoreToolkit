@@ -66,8 +66,9 @@ jobs:
           conan profile detect --force
           # The whole stack is C++23; arrow (a CoreToolkit dep) also requires >=17.
           # Pin the detected profile so the runner's compiler default can't drop it lower.
+          # Use plain "23" (not "gnu23") so it is valid for MSVC on windows-latest too.
           profile_path="$(conan profile path default)"
-          sed -i 's/^compiler.cppstd=.*/compiler.cppstd=gnu23/' "$profile_path"
+          sed -i 's/^compiler.cppstd=.*/compiler.cppstd=23/' "$profile_path"
 
       - name: Build plugin
         id: build

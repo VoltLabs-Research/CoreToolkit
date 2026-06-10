@@ -1,13 +1,14 @@
 #include <volt/utilities/parquet_atom_writer.h>
+#include <volt/utilities/duckdb_parquet.h>
 #include <volt/math/point3.h>
 
-#include <arrow/api.h>
-#include <arrow/io/file.h>
-#include <parquet/arrow/writer.h>
+#include <duckdb.hpp>
 
+#include <cstdint>
 #include <map>
-#include <memory>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace Volt {
 
@@ -15,18 +16,54 @@ namespace {
 
 enum class ColType { Double, Int64, String, ListDouble };
 
+// A dynamic column buffers one DuckDB Value per completed row. Columns are created
+// on first use and back-filled with typed NULLs so every row stays aligned; the
+// full schema is only known after the atom loop, so the table is materialised and
+// written at the end (mirrors the previous Arrow buffer-then-write design).
 struct DynColumn {
     std::string name;
     ColType type;
-    std::shared_ptr<arrow::ArrayBuilder> builder;
-    arrow::DoubleBuilder* listValue = nullptr; // for ListDouble
+    std::vector<duckdb::Value> values;
     bool touchedThisRow = false;
 };
+
+duckdb::LogicalType logicalTypeFor(ColType type){
+    switch(type){
+        case ColType::Double:     return duckdb::LogicalType::DOUBLE;
+        case ColType::Int64:      return duckdb::LogicalType::BIGINT;
+        case ColType::String:     return duckdb::LogicalType::VARCHAR;
+        case ColType::ListDouble: return duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
+    }
+    return duckdb::LogicalType::DOUBLE;
+}
+
+const char* sqlTypeFor(ColType type){
+    switch(type){
+        case ColType::Double:     return "DOUBLE";
+        case ColType::Int64:      return "BIGINT";
+        case ColType::String:     return "VARCHAR";
+        case ColType::ListDouble: return "DOUBLE[]";
+    }
+    return "DOUBLE";
+}
+
+// Quotes a SQL identifier (column name) with double quotes, doubling any embedded
+// double quote. Plugin-supplied property names are untrusted as identifiers.
+std::string quoteIdent(const std::string& name){
+    std::string out;
+    out.reserve(name.size() + 2);
+    out.push_back('"');
+    for(char c : name){
+        if(c == '"') out.push_back('"');
+        out.push_back(c);
+    }
+    out.push_back('"');
+    return out;
+}
 
 } // namespace
 
 struct ColumnarAtomWriter::Impl {
-    arrow::MemoryPool* pool = arrow::default_memory_pool();
     std::vector<DynColumn> columns;
     std::unordered_map<std::string, std::size_t> index;
     std::int64_t rowsCompleted = 0;
@@ -45,19 +82,10 @@ struct ColumnarAtomWriter::Impl {
         DynColumn col;
         col.name = name;
         col.type = type;
-        switch(type){
-            case ColType::Double: col.builder = std::make_shared<arrow::DoubleBuilder>(pool); break;
-            case ColType::Int64:  col.builder = std::make_shared<arrow::Int64Builder>(pool); break;
-            case ColType::String: col.builder = std::make_shared<arrow::StringBuilder>(pool); break;
-            case ColType::ListDouble: {
-                auto value = std::make_shared<arrow::DoubleBuilder>(pool);
-                col.listValue = value.get();
-                col.builder = std::make_shared<arrow::ListBuilder>(pool, value);
-                break;
-            }
-        }
-        // Back-fill nulls for rows that completed before this column appeared.
-        for(std::int64_t r = 0; r < rowsCompleted; ++r) (void)col.builder->AppendNull();
+        // Back-fill typed NULLs for rows that completed before this column appeared.
+        const duckdb::LogicalType lt = logicalTypeFor(type);
+        col.values.reserve(static_cast<std::size_t>(rowsCompleted) + 1);
+        for(std::int64_t r = 0; r < rowsCompleted; ++r) col.values.emplace_back(lt);
 
         index.emplace(name, columns.size());
         columns.push_back(std::move(col));
@@ -67,37 +95,38 @@ struct ColumnarAtomWriter::Impl {
     void appendDouble(const std::string& name, double v){
         if(isReserved(name)) return;
         auto& c = ensure(name, ColType::Double);
-        (void)static_cast<arrow::DoubleBuilder*>(c.builder.get())->Append(v);
+        // Match the established column type (types are consistent per name in
+        // practice; coerce defensively rather than mismatch the schema).
+        if(c.type == ColType::Int64) c.values.emplace_back(duckdb::Value::BIGINT(static_cast<std::int64_t>(v)));
+        else                          c.values.emplace_back(duckdb::Value::DOUBLE(v));
         c.touchedThisRow = true;
     }
     void appendInt64(const std::string& name, std::int64_t v){
         if(isReserved(name)) return;
         auto& c = ensure(name, ColType::Int64);
-        if(c.type == ColType::Double){
-            (void)static_cast<arrow::DoubleBuilder*>(c.builder.get())->Append(static_cast<double>(v));
-        } else {
-            (void)static_cast<arrow::Int64Builder*>(c.builder.get())->Append(v);
-        }
+        if(c.type == ColType::Double) c.values.emplace_back(duckdb::Value::DOUBLE(static_cast<double>(v)));
+        else                           c.values.emplace_back(duckdb::Value::BIGINT(v));
         c.touchedThisRow = true;
     }
     void appendString(const std::string& name, const std::string& v){
         if(isReserved(name)) return;
         auto& c = ensure(name, ColType::String);
-        (void)static_cast<arrow::StringBuilder*>(c.builder.get())->Append(v);
+        c.values.emplace_back(duckdb::Value(v));
         c.touchedThisRow = true;
     }
     void appendList(const std::string& name, const std::vector<double>& v){
         if(isReserved(name)) return;
         auto& c = ensure(name, ColType::ListDouble);
-        auto* lb = static_cast<arrow::ListBuilder*>(c.builder.get());
-        (void)lb->Append();
-        (void)c.listValue->AppendValues(v.data(), static_cast<std::int64_t>(v.size()));
+        std::vector<duckdb::Value> items;
+        items.reserve(v.size());
+        for(double d : v) items.emplace_back(duckdb::Value::DOUBLE(d));
+        c.values.emplace_back(duckdb::Value::LIST(duckdb::LogicalType::DOUBLE, std::move(items)));
         c.touchedThisRow = true;
     }
 
     void finishRow(){
         for(auto& c : columns){
-            if(!c.touchedThisRow) (void)c.builder->AppendNull();
+            if(!c.touchedThisRow) c.values.emplace_back(logicalTypeFor(c.type)); // typed NULL
             c.touchedThisRow = false;
         }
         ++rowsCompleted;
@@ -117,7 +146,6 @@ void streamAtomsToParquet(
     const StructureIdResolver& resolveStructureId
 ){
     const std::size_t natoms = static_cast<std::size_t>(frame.natoms);
-    arrow::MemoryPool* pool = arrow::default_memory_pool();
 
     // Stable structure_id per bucket, assigned in first-seen order.
     std::map<std::string, std::int32_t> bucketId;
@@ -129,12 +157,12 @@ void streamAtomsToParquet(
         return id;
     };
 
-    arrow::UInt32Builder atomIndexB(pool);
-    arrow::UInt64Builder idB(pool);
-    arrow::DoubleBuilder xB(pool), yB(pool), zB(pool);
-    arrow::StringBuilder bucketB(pool);
-    arrow::Int32Builder structureIdB(pool);
-    arrow::StringBuilder structureNameB(pool);
+    // Fixed columns buffered as native vectors (structure_name mirrors bucket).
+    std::vector<std::uint32_t> atomIndex; atomIndex.reserve(natoms);
+    std::vector<std::uint64_t> ids;        ids.reserve(natoms);
+    std::vector<double> xs, ys, zs;        xs.reserve(natoms); ys.reserve(natoms); zs.reserve(natoms);
+    std::vector<std::string> buckets;      buckets.reserve(natoms);
+    std::vector<std::int32_t> structureIds; structureIds.reserve(natoms);
 
     ColumnarAtomWriter::Impl dyn;
     ColumnarAtomWriter writer(dyn);
@@ -145,67 +173,63 @@ void streamAtomsToParquet(
             ? static_cast<std::int32_t>(resolveStructureId(i))
             : idForBucket(bucket);
 
-        (void)atomIndexB.Append(static_cast<std::uint32_t>(i));
-        (void)idB.Append(i < frame.ids.size()
+        atomIndex.push_back(static_cast<std::uint32_t>(i));
+        ids.push_back(i < frame.ids.size()
             ? static_cast<std::uint64_t>(frame.ids[i])
             : static_cast<std::uint64_t>(i));
         const auto& pos = i < frame.positions.size() ? frame.positions[i] : Point3::Origin();
-        (void)xB.Append(pos.x());
-        (void)yB.Append(pos.y());
-        (void)zB.Append(pos.z());
-        (void)bucketB.Append(bucket);
-        (void)structureIdB.Append(sid);
-        (void)structureNameB.Append(bucket);
+        xs.push_back(pos.x());
+        ys.push_back(pos.y());
+        zs.push_back(pos.z());
+        buckets.push_back(bucket);
+        structureIds.push_back(sid);
 
         if(writePerAtomColumns) writePerAtomColumns(writer, i);
         dyn.finishRow();
     }
 
-    std::vector<std::shared_ptr<arrow::Field>> fields = {
-        arrow::field("atom_index", arrow::uint32()),
-        arrow::field("id", arrow::uint64()),
-        arrow::field("x", arrow::float64()),
-        arrow::field("y", arrow::float64()),
-        arrow::field("z", arrow::float64()),
-        arrow::field("bucket", arrow::utf8()),
-        arrow::field("structure_id", arrow::int32()),
-        arrow::field("structure_name", arrow::utf8())
-    };
-    std::vector<std::shared_ptr<arrow::Array>> arrays(8);
-    if(!atomIndexB.Finish(&arrays[0]).ok()) return;
-    if(!idB.Finish(&arrays[1]).ok()) return;
-    if(!xB.Finish(&arrays[2]).ok()) return;
-    if(!yB.Finish(&arrays[3]).ok()) return;
-    if(!zB.Finish(&arrays[4]).ok()) return;
-    if(!bucketB.Finish(&arrays[5]).ok()) return;
-    if(!structureIdB.Finish(&arrays[6]).ok()) return;
-    if(!structureNameB.Finish(&arrays[7]).ok()) return;
+    try {
+        duckdb::DuckDB db(nullptr);
+        duckdb::Connection con(db);
 
-    for(auto& col : dyn.columns){
-        std::shared_ptr<arrow::Array> arr;
-        if(!col.builder->Finish(&arr).ok()) return;
-        std::shared_ptr<arrow::DataType> dt;
-        switch(col.type){
-            case ColType::Double: dt = arrow::float64(); break;
-            case ColType::Int64:  dt = arrow::int64(); break;
-            case ColType::String: dt = arrow::utf8(); break;
-            case ColType::ListDouble: dt = arrow::list(arrow::float64()); break;
+        // Build the table schema: fixed columns + dynamic columns in creation order.
+        std::string ddl =
+            "CREATE TABLE atoms("
+            "atom_index UINTEGER, id UBIGINT, x DOUBLE, y DOUBLE, z DOUBLE, "
+            "bucket VARCHAR, structure_id INTEGER, structure_name VARCHAR";
+        for(const auto& col : dyn.columns){
+            ddl += ", ";
+            ddl += quoteIdent(col.name);
+            ddl += ' ';
+            ddl += sqlTypeFor(col.type);
         }
-        fields.push_back(arrow::field(col.name, dt));
-        arrays.push_back(arr);
+        ddl += ')';
+        if(con.Query(ddl)->HasError()) return;
+
+        {
+            duckdb::Appender appender(con, "atoms");
+            for(std::size_t i = 0; i < natoms; ++i){
+                appender.BeginRow();
+                appender.Append<std::uint32_t>(atomIndex[i]);
+                appender.Append<std::uint64_t>(ids[i]);
+                appender.Append<double>(xs[i]);
+                appender.Append<double>(ys[i]);
+                appender.Append<double>(zs[i]);
+                appender.Append(duckdb::Value(buckets[i]));
+                appender.Append<std::int32_t>(structureIds[i]);
+                appender.Append(duckdb::Value(buckets[i])); // structure_name == bucket
+                for(auto& col : dyn.columns){
+                    appender.Append(col.values[i]);
+                }
+                appender.EndRow();
+            }
+            appender.Close();
+        }
+
+        (void)Detail::copyTableToParquet(con, "atoms", filePath);
+    } catch (...) {
+        // Writers return void / best-effort; swallow to preserve prior behaviour.
     }
-
-    auto schema = arrow::schema(fields);
-    auto table = arrow::Table::Make(schema, arrays);
-
-    auto outResult = arrow::io::FileOutputStream::Open(filePath);
-    if(!outResult.ok()) return;
-    std::shared_ptr<arrow::io::FileOutputStream> out = *outResult;
-
-    parquet::WriterProperties::Builder props;
-    props.compression(parquet::Compression::ZSTD);
-    (void)parquet::arrow::WriteTable(*table, pool, out,
-        natoms > 0 ? static_cast<std::int64_t>(natoms) : 1, props.build());
 }
 
 }

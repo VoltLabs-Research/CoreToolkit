@@ -1,10 +1,8 @@
 #include <volt/utilities/json_utils.h>
+#include <volt/utilities/duckdb_parquet.h>
 
-#include <arrow/api.h>
-#include <arrow/io/file.h>
-#include <parquet/arrow/writer.h>
+#include <duckdb.hpp>
 
-#include <memory>
 #include <string>
 
 namespace Volt {
@@ -30,25 +28,20 @@ std::string normalizeParquetPath(const std::string& filePath){
 bool JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
     const std::string outputPath = normalizeParquetPath(filePath);
     try {
-        arrow::StringBuilder payloadBuilder;
-        if(!payloadBuilder.Append(data.dump()).ok()) return false;
+        duckdb::DuckDB db(nullptr);
+        duckdb::Connection con(db);
 
-        std::shared_ptr<arrow::Array> payloadArray;
-        if(!payloadBuilder.Finish(&payloadArray).ok()) return false;
+        if(con.Query("CREATE TABLE t(payload VARCHAR)")->HasError()) return false;
 
-        auto schema = arrow::schema({arrow::field("payload", arrow::utf8())});
-        auto table = arrow::Table::Make(schema, {payloadArray});
+        {
+            duckdb::Appender appender(con, "t");
+            appender.BeginRow();
+            appender.Append(duckdb::Value(data.dump()));
+            appender.EndRow();
+            appender.Close();
+        }
 
-        auto outFileResult = arrow::io::FileOutputStream::Open(outputPath);
-        if(!outFileResult.ok()) return false;
-        std::shared_ptr<arrow::io::FileOutputStream> outFile = *outFileResult;
-
-        parquet::WriterProperties::Builder props;
-        props.compression(parquet::Compression::ZSTD);
-
-        const arrow::Status status = parquet::arrow::WriteTable(
-            *table, arrow::default_memory_pool(), outFile, /*chunk_size=*/1, props.build());
-        return status.ok();
+        return Detail::copyTableToParquet(con, "t", outputPath);
     } catch (...) {
         return false;
     }

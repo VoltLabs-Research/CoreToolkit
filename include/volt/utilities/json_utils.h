@@ -4,84 +4,38 @@
 #include <string>
 #include <fstream>
 #include <cstdint>
-#include <ostream>
-#include <algorithm>
-#include <limits>
-#include <stdexcept>
-#include <vector>
 
 namespace Volt {
 
 using json = nlohmann::json;
 
 /**
- * @brief Lightweight msgpack writer for JSON serialization
- */
-class MsgpackWriter {
-public:
-    explicit MsgpackWriter(std::ostream& os) : _os(os) {}
-
-    void write_nil();
-    void write_bool(bool v);
-    void write_int(int64_t v);
-    void write_uint(uint64_t v);
-    void write_double(double v);
-    void write_str(const std::string& s);
-    void write_array_header(uint32_t size);
-    void write_map_header(uint32_t size);
-
-    inline void write_key(const char* s) { write_str(std::string(s)); }
-    inline void write_key(const std::string& s) { write_str(s); }
-
-private:
-    std::ostream& _os;
-
-    void write_raw(const void* data, size_t size);
-    void write_u8(uint8_t v);
-    void write_u16(uint16_t v);
-    void write_u32(uint32_t v);
-    void write_u64(uint64_t v);
-};
-
-/**
- * @brief Simple JSON utilities for analysis packages
- * 
- * This provides basic JSON serialization functionality without
- * depending on Volt-specific types like DislocationNetwork.
+ * @brief JSON utilities for analysis packages.
+ *
+ * Summary/aggregate plugin results (dislocation networks, meshes, charts,
+ * cluster stats) are arbitrary JSON structures that are not naturally tabular.
+ * They are persisted losslessly as a single-row Parquet file carrying the JSON
+ * document in a `payload` string column, so the whole ecosystem stays on one
+ * storage format (Parquet).
  */
 class JsonUtils {
 public:
     /**
-     * @brief Select the export format used by writeJsonMsgpackToFile.
+     * @brief Write a JSON document as a single-row Parquet file.
      *
-     * Supported values are "msgpack" and "json". The default is "msgpack".
+     * Schema: one column `payload` (UTF-8 string) holding `data.dump()`.
+     * The path extension is normalized to `.parquet`.
+     *
+     * The trailing boolean is accepted (and ignored) so call sites that used the
+     * previous serializer signature port over with a pure rename; key ordering
+     * is irrelevant for a single opaque JSON payload.
      */
-    static bool setExportFormat(const std::string& format);
+    static bool writeJsonToParquet(const json& data, const std::string& filePath, bool = false);
 
     /**
-     * @brief Write JSON data using the selected export format
-     */
-    static bool writeJsonMsgpackToFile(const json& data, const std::string& filePath, bool sortKeys = true);
-
-    /**
-     * @brief Write JSON data to a regular JSON file
+     * @brief Write JSON data to a regular JSON file (debug/inspection only).
      */
     static bool writeJsonToFile(const json& data, const std::string& filePath, int indent = 2);
-
-    /**
-     * @brief Checked size conversion for msgpack
-     */
-    static inline uint32_t checked_u32_size(std::size_t n) {
-        if (n > static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())) {
-            throw std::runtime_error("JSON container too large for msgpack u32 header.");
-        }
-        return static_cast<uint32_t>(n);
-    }
-
-    // Recursively serialize an nlohmann::json value through a MsgpackWriter.
-    // Exposed so streaming serializers can embed json subtrees (e.g. listing
-    // sub-listings) without building a full DOM for the whole document.
-    static void writeJsonAsMsgpack(MsgpackWriter& writer, const json& data, bool sortKeys);
 };
 
 }

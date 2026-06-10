@@ -41,8 +41,9 @@ RUN conan export CoreToolkit \
     && conan export PolyhedralTemplateMatching \
     && conan export OpenDXA
 
-# Deps build at the profile's gnu17 (Arrow's native standard); CoreToolkit and
-# the algorithm stay C++23 via their CMake. Pin CoreToolkit's package_id to 23.
+# Deps build at the profile's gnu17 (clears every dep's minimum; DuckDB's
+# prebuilt Parquet binary downloads at this standard); CoreToolkit and the
+# algorithm stay C++23 via their CMake. Pin CoreToolkit's package_id to 23.
 # boost without_stacktrace avoids the __cxa_allocate_exception multiple-definition
 # clash with -static-libstdc++ (we never use boost::stacktrace).
 RUN conan install --requires="coretoolkit/[>=2.0]" \

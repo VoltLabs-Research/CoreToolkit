@@ -65,11 +65,12 @@ jobs:
           python -m pip install --upgrade pip conan zstandard
           conan profile detect --force
 
-      # Arrow (with parquet) has no ConanCenter binary and always compiles from
-      # source (~15 min). Persist the Conan package store between runs so it is
-      # built once per OS and reused. Keyed on CoreToolkit's conanfile so a
-      # dependency/option change invalidates the cache; restore-keys give a warm
-      # partial hit otherwise. Bump the v1 token to force a clean rebuild.
+      # DuckDB (our Parquet engine) ships prebuilt ConanCenter binaries for every
+      # CI target, so it downloads instead of compiling. The rest of the deps
+      # (boost headers, onetbb, spdlog) are quick. Persist the Conan package store
+      # between runs anyway so warm runs skip even those. Keyed on CoreToolkit's
+      # conanfile so a dependency/option change invalidates the cache; restore-keys
+      # give a warm partial hit otherwise. Bump the v1 token to force a clean rebuild.
       - name: Cache Conan packages
         uses: actions/cache@v4
         with:
@@ -107,23 +108,22 @@ jobs:
           # Volt's own C++ (CoreToolkit + the plugin) is C++23 and forces that
           # standard through CMake (CMAKE_CXX_STANDARD 23 / cxx_std_23), so it
           # does NOT rely on Conan's cppstd setting. Build the third-party deps
-          # at C++17 instead — it is Arrow 18.1's native standard. Compiling
-          # Arrow in C++23 mode breaks on AppleClang (libc++ promotes the
-          # std::aligned_storage C++23 deprecation into a hard error, which is
-          # what was failing the macOS job); 17 also clears Arrow's minimum on
-          # every compiler, including MSVC (whose detected default is 14).
-          # CoreToolkit is pinned back to 23 so its own package_id stays honest.
+          # at C++17 instead: it clears every dep's minimum on every compiler
+          # (including MSVC, whose detected default is 14), and DuckDB's prebuilt
+          # ConanCenter binary is available at cppstd=17 on all three OSes, so it
+          # downloads rather than compiling. CoreToolkit is pinned back to 23 so
+          # its own package_id stays honest.
           #
           # boost/*:without_stacktrace=True drops Boost's stacktrace libs. We
           # never use boost::stacktrace, and on Linux boost 1.88 builds
           # libboost_stacktrace_from_exception.a, which interposes
           # __cxa_allocate_exception. Linking the plugin with -static-libstdc++
           # then hits "multiple definition of __cxa_allocate_exception" against
-          # libstdc++.a. Arrow only needs Boost headers (boost::boost), so this
-          # is safe; it also trims the Boost build.
+          # libstdc++.a. We only use Boost headers (boost::boost), so this is
+          # safe; it also trims the Boost build.
           #
           # Both installs MUST pass identical settings/options so the cached
-          # Arrow / CoreToolkit binaries from the first install are reused by the
+          # DuckDB / CoreToolkit binaries from the first install are reused by the
           # second.
           conan_args=(
             -o "hwloc/*:shared=True"

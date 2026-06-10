@@ -14,7 +14,7 @@ class CoreToolkitConan(ConanFile):
         "onetbb/2021.12.0",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
-        "arrow/18.1.0",
+        "duckdb/1.4.3",
     )
     default_options = {
         "hwloc/*:shared": True,
@@ -23,25 +23,29 @@ class CoreToolkitConan(ConanFile):
         # libboost_stacktrace_from_exception.a, which interposes
         # __cxa_allocate_exception; linking a plugin with -static-libstdc++ then
         # fails with "multiple definition of __cxa_allocate_exception" against
-        # libstdc++.a. Arrow only needs Boost headers, so dropping the stacktrace
-        # libs is safe (and trims the Boost build).
+        # libstdc++.a. We only use Boost headers, so dropping the stacktrace libs
+        # is safe (and trims the Boost build).
         "boost/*:without_stacktrace": True,
-        # We only ever write Parquet (arrow/api.h, arrow/io/file.h,
-        # parquet/arrow/writer.h). Keep Arrow's build minimal: there is no
-        # ConanCenter binary for a parquet-enabled Arrow, so it always compiles
-        # from source here and every extra module is dead weight on the build
-        # clock. These mirror the recipe defaults (so the package_id is
-        # unchanged); they are pinned explicitly to guard against default drift.
-        "arrow/*:parquet": True,
-        "arrow/*:with_zstd": True,
-        "arrow/*:compute": False,
-        "arrow/*:acero": False,
-        "arrow/*:dataset_modules": False,
-        "arrow/*:gandiva": False,
-        "arrow/*:with_flight_rpc": False,
-        "arrow/*:with_csv": False,
-        "arrow/*:with_json": False,
-        "arrow/*:with_orc": False,
+        # DuckDB is our Parquet engine. Unlike Arrow (no ConanCenter binary for a
+        # parquet build -> ~35 min source compile on every OS, and a hard MSVC
+        # build failure on Windows), DuckDB ships prebuilt binaries for every CI
+        # target, so it downloads instead of compiling. We only need a static lib
+        # with the built-in Parquet writer; every optional extension is off to
+        # keep the package minimal (these mirror the recipe defaults).
+        "duckdb/*:shared": False,
+        "duckdb/*:with_parquet": True,
+        "duckdb/*:with_httpfs": False,
+        "duckdb/*:with_json": False,
+        "duckdb/*:with_icu": False,
+        "duckdb/*:with_tpch": False,
+        "duckdb/*:with_tpcds": False,
+        "duckdb/*:with_fts": False,
+        "duckdb/*:with_inet": False,
+        "duckdb/*:with_excel": False,
+        "duckdb/*:with_autocomplete": False,
+        "duckdb/*:with_visualizer": False,
+        "duckdb/*:with_sqlsmith": False,
+        "duckdb/*:with_shell": False,
     }
     exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "cmake/*"
 
@@ -70,8 +74,7 @@ class CoreToolkitConan(ConanFile):
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",
-            "arrow::libarrow",
-            "arrow::libparquet",
+            "duckdb::duckdb",
         ]
         self.cpp_info.set_property("cmake_build_modules", [
             os.path.join(self.package_folder, "lib", "cmake", "coretoolkit", "VoltPlugin.cmake")

@@ -7,7 +7,7 @@ BUILD_TYPE="${BUILD_TYPE:-Release}"
 # boost/*:without_stacktrace=True: we never use boost::stacktrace, and on Linux
 # boost 1.88's libboost_stacktrace_from_exception.a interposes
 # __cxa_allocate_exception, which collides with libstdc++.a under
-# -static-libstdc++. Arrow only needs Boost headers, so dropping it is safe.
+# -static-libstdc++. We only use Boost headers, so dropping it is safe.
 CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True" -o "boost/*:without_stacktrace=True")
 SUPPORTED_CMAKE_VERSION="3.20.0"
 SUPPORTED_CONAN_VERSION="2.0.0"

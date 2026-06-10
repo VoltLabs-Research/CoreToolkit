@@ -77,6 +77,7 @@ jobs:
           mkdir -p "$install_dir"
 
           conan export "$coretoolkit_dir"
+          coretoolkit_version="$(conan inspect "$coretoolkit_dir" --format=json | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
 
           if [[ -n '${{ inputs.dependency_repos }}' ]]; then
             while IFS= read -r dependency_repo; do
@@ -90,7 +91,7 @@ jobs:
           EOF
           fi
 
-          conan install --requires="coretoolkit/1.0.0" \
+          conan install --requires="coretoolkit/${coretoolkit_version}" \
             -o "hwloc/*:shared=True" \
             --build=missing \
             -s build_type=Release

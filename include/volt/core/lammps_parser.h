@@ -70,11 +70,21 @@ public:
         std::vector<Point3> positions;
         std::vector<int> types;
         std::vector<int> ids;
+        // Periodic image flags (ix/iy/iz dump columns). Empty when the dump lacks
+        // them; multi-frame transforms (unwrap) use them when present and fall
+        // back to a frame-0 minimum-image scan otherwise.
+        std::vector<int> imageX;
+        std::vector<int> imageY;
+        std::vector<int> imageZ;
         std::vector<std::string> headerOrder;
         std::unordered_map<std::string, std::string> headerProperties;
         std::vector<std::string> atomColumnOrder;
         bool atomColumnsScaled = false;
         std::unordered_map<std::string, AtomColumn> atomProperties;
+
+        [[nodiscard]] bool hasImageFlags() const noexcept{
+            return !imageX.empty() && !imageY.empty() && !imageZ.empty();
+        }
 
         const std::string* findHeaderProperty(const std::string& name) const{
             auto it = headerProperties.find(name);
@@ -157,8 +167,8 @@ public:
 private:
     bool parseStream(std::istream &in, Frame &frame);
     bool readHeader(std::istream &in, Frame &f);
-    bool readBoxBounds(std::istream &in, Frame &f);
-    bool readAtomData(std::istream &in, Frame &f);
+    bool readBoxBounds(std::istream &in, Frame &f, std::string &atomsHeaderLine);
+    bool readAtomData(std::istream &in, Frame &f, const std::string &atomsHeaderLine);
 
     std::vector<std::string> parseColumns(const std::string &line);
 

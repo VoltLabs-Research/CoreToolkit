@@ -180,6 +180,9 @@ enum class ColumnKind : unsigned char{
     PosX,
     PosY,
     PosZ,
+    ImageX,
+    ImageY,
+    ImageZ,
     Extra
 };
 
@@ -197,10 +200,14 @@ struct AtomColumns{
     int xsCol = -1;
     int ysCol = -1;
     int zsCol = -1;
+    int ixCol = -1;
+    int iyCol = -1;
+    int izCol = -1;
     int posXCol = -1;
     int posYCol = -1;
     int posZCol = -1;
     bool scaled = false;
+    bool hasImageFlags = false;
     bool valid = false;
     std::vector<std::string> columnNames;
     std::vector<ColumnKind> kinds;
@@ -242,6 +249,9 @@ inline AtomColumns parseAtomColumns(const LineView& line){
             else if(tok == "xs") cols.xsCol = columnIndex;
             else if(tok == "ys") cols.ysCol = columnIndex;
             else if(tok == "zs") cols.zsCol = columnIndex;
+            else if(tok == "ix") cols.ixCol = columnIndex;
+            else if(tok == "iy") cols.iyCol = columnIndex;
+            else if(tok == "iz") cols.izCol = columnIndex;
             cols.columnNames.emplace_back(tok);
             ++columnIndex;
         }
@@ -253,6 +263,7 @@ inline AtomColumns parseAtomColumns(const LineView& line){
     cols.posYCol = cols.scaled ? cols.ysCol : cols.yCol;
     cols.posZCol = cols.scaled ? cols.zsCol : cols.zCol;
     cols.valid = (cols.posXCol >= 0 && cols.posYCol >= 0 && cols.posZCol >= 0);
+    cols.hasImageFlags = (cols.ixCol >= 0 && cols.iyCol >= 0 && cols.izCol >= 0);
     cols.kinds.assign(static_cast<size_t>(columnIndex), ColumnKind::Ignore);
     cols.extraIndices.assign(static_cast<size_t>(columnIndex), -1);
 
@@ -261,6 +272,11 @@ inline AtomColumns parseAtomColumns(const LineView& line){
     if(cols.posXCol >= 0) cols.kinds[cols.posXCol] = ColumnKind::PosX;
     if(cols.posYCol >= 0) cols.kinds[cols.posYCol] = ColumnKind::PosY;
     if(cols.posZCol >= 0) cols.kinds[cols.posZCol] = ColumnKind::PosZ;
+    if(cols.hasImageFlags){
+        cols.kinds[cols.ixCol] = ColumnKind::ImageX;
+        cols.kinds[cols.iyCol] = ColumnKind::ImageY;
+        cols.kinds[cols.izCol] = ColumnKind::ImageZ;
+    }
 
     tokenIndex = 0;
     columnIndex = 0;
@@ -317,6 +333,15 @@ inline void initializeExtraAtomColumns(const AtomColumns& cols, LammpsParser::Fr
     frame.atomColumnOrder = cols.columnNames;
     frame.atomColumnsScaled = cols.scaled;
     frame.atomProperties.clear();
+    if(cols.hasImageFlags){
+        frame.imageX.assign(static_cast<std::size_t>(frame.natoms), 0);
+        frame.imageY.assign(static_cast<std::size_t>(frame.natoms), 0);
+        frame.imageZ.assign(static_cast<std::size_t>(frame.natoms), 0);
+    }else{
+        frame.imageX.clear();
+        frame.imageY.clear();
+        frame.imageZ.clear();
+    }
     for(const auto& extra : cols.extras){
         auto& column = frame.atomProperties[extra.name];
         column.dataType = extra.dataType;
@@ -918,6 +943,9 @@ inline const char* parseAtomLine(
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
+    int imageX = 0;
+    int imageY = 0;
+    int imageZ = 0;
     int col = 0;
 
     while(p < end){
@@ -965,6 +993,15 @@ inline const char* parseAtomLine(
                     if(!parseDoubleToken(tokenStart, tokenEnd, z)) ok = false;
                     else zSet = true;
                     break;
+                case ColumnKind::ImageX:
+                    parseIntToken(tokenStart, tokenEnd, imageX);
+                    break;
+                case ColumnKind::ImageY:
+                    parseIntToken(tokenStart, tokenEnd, imageY);
+                    break;
+                case ColumnKind::ImageZ:
+                    parseIntToken(tokenStart, tokenEnd, imageZ);
+                    break;
                 case ColumnKind::Extra:
                     if(!storeExtraAtomValue(frame, cols, cols.extraIndices[static_cast<std::size_t>(col)], index, tokenStart, tokenEnd)){
                         ok = false;
@@ -989,6 +1026,12 @@ inline const char* parseAtomLine(
         frame.positions[index] = Point3(px, py, pz);
     }else{
         frame.positions[index] = Point3(x, y, z);
+    }
+
+    if(cols.hasImageFlags){
+        frame.imageX[index] = imageX;
+        frame.imageY[index] = imageY;
+        frame.imageZ[index] = imageZ;
     }
 
     frame.ids[index] = id;
@@ -1271,41 +1314,56 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
 
     if(!readLine(cursor, end, line) || !lineStartsWith(line, "ITEM: TIMESTEP")) return false;
     if(!readLine(cursor, end, line) || !parseIntLine(line, frame.timestep)) return false;
-    if(!readLine(cursor, end, line) || !lineStartsWith(line, "ITEM: NUMBER OF ATOMS")) return false;
-    if(!readLine(cursor, end, line) || !parseIntLine(line, frame.natoms)) return false;
 
-    if(frame.natoms <= 0) return false;
-    frame.positions.resize(frame.natoms);
-    frame.types.resize(frame.natoms);
-    frame.ids.resize(frame.natoms);
+    frame.natoms = 0;
     frame.headerOrder.clear();
     frame.headerProperties.clear();
     frame.atomProperties.clear();
     frame.atomColumnOrder.clear();
     frame.atomColumnsScaled = false;
 
-    while(true){
-        if(!readLine(cursor, end, line)) return false;
-        if(lineStartsWith(line, "ITEM: BOX BOUNDS")) break;
+    // LAMMPS does not fix the order of the header ITEMs: "NUMBER OF ATOMS" and
+    // "BOX BOUNDS" can appear in either order (and other ITEMs such as TIME may
+    // be interleaved). The only reliable end-of-header marker is "ITEM: ATOMS".
+    // Loop over every header section, dispatching by type, until we reach it.
+    bool haveNatoms = false;
+    bool haveBox = false;
+    bool pbcX = true, pbcY = true, pbcZ = true;
+    double lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0}, tilt[3] = {0, 0, 0};
+
+    if(!readLine(cursor, end, line)) return false;
+    while(!lineStartsWith(line, "ITEM: ATOMS")){
         if(!lineStartsWith(line, "ITEM: ")) return false;
 
-        const std::string key = trimCopy(std::string_view(
-            line.begin + 6,
-            static_cast<std::size_t>(line.end - (line.begin + 6))
-        ));
+        if(lineStartsWith(line, "ITEM: BOX BOUNDS")){
+            parseBoxFlags(line, pbcX, pbcY, pbcZ);
+            for(int i = 0; i < 3; ++i){
+                if(!readLine(cursor, end, line)) return false;
+                if(!parseBoundsLine(line, lo[i], hi[i], tilt[i])) return false;
+            }
+            haveBox = true;
+        }else{
+            const std::string key = trimCopy(std::string_view(
+                line.begin + 6,
+                static_cast<std::size_t>(line.end - (line.begin + 6))
+            ));
+            if(!readLine(cursor, end, line)) return false;
+            if(key == "NUMBER OF ATOMS"){
+                if(!parseIntLine(line, frame.natoms)) return false;
+                haveNatoms = true;
+            }else{
+                frame.headerOrder.push_back(key);
+                frame.headerProperties[key] = trimCopy(lineToString(line));
+            }
+        }
         if(!readLine(cursor, end, line)) return false;
-        frame.headerOrder.push_back(key);
-        frame.headerProperties[key] = trimCopy(lineToString(line));
     }
 
-    bool pbcX = true, pbcY = true, pbcZ = true;
-    parseBoxFlags(line, pbcX, pbcY, pbcZ);
-
-    double lo[3], hi[3], tilt[3];
-    for(int i = 0; i < 3; ++i){
-        if(!readLine(cursor, end, line)) return false;
-        if(!parseBoundsLine(line, lo[i], hi[i], tilt[i])) return false;
-    }
+    if(!haveNatoms || frame.natoms <= 0) return false;
+    if(!haveBox) return false;
+    frame.positions.resize(frame.natoms);
+    frame.types.resize(frame.natoms);
+    frame.ids.resize(frame.natoms);
 
     Point3 minc(lo[0], lo[1], lo[2]);
     Point3 maxc(hi[0], hi[1], hi[2]);
@@ -1329,7 +1387,7 @@ inline bool parseMapped(const char* data, size_t size, LammpsParser::Frame& fram
     frame.simulationCell.setMatrix(M);
     frame.simulationCell.setPbcFlags(pbcX, pbcY, pbcZ);
 
-    if(!readLine(cursor, end, line) || !lineStartsWith(line, "ITEM: ATOMS")) return false;
+    // 'line' now holds the "ITEM: ATOMS" column header line.
     AtomColumns cols = parseAtomColumns(line);
     if(!cols.valid) return false;
     initializeExtraAtomColumns(cols, frame);
@@ -1580,18 +1638,21 @@ bool LammpsParser::writeFileMergedWithExtraColumns(
 // If any stage fails, the function aborts and returns false.
 bool LammpsParser::parseStream(std::istream &in, Frame &frame){
     if(!readHeader(in, frame)) return false;
-    if(!readBoxBounds(in, frame)) return false;
-    if(!readAtomData(in, frame)) return false;
+    std::string atomsHeaderLine;
+    if(!readBoxBounds(in, frame, atomsHeaderLine)) return false;
+    if(!readAtomData(in, frame, atomsHeaderLine)) return false;
 
     spdlog::info("Parsed {} atoms at timestep {} ", frame.natoms, frame.timestep);
-    
+
     return true;
 }
 
-// Read and validate the LAMMPS dump header.
-// Expects an "ITEM: TIMESTEP" line followed by the timestep number,
-// then "ITEM: NUMBER OF ATOMS" and the atom count. Reserves spaces in 
-// the frame's vectors for positions, types and IDs.
+// Read and validate the start of the LAMMPS dump header.
+// Expects an "ITEM: TIMESTEP" line followed by the timestep number, then
+// resets the frame's per-atom containers. The atom count is NOT read here:
+// LAMMPS does not fix the order of "NUMBER OF ATOMS" relative to the other
+// header ITEMs, so it is captured by readBoxBounds while it scans header
+// sections up to "ITEM: BOX BOUNDS".
 bool LammpsParser::readHeader(std::istream &in, Frame &f) {
     std::string line;
     // Expect "ITEM: TIMESTEP"
@@ -1600,15 +1661,10 @@ bool LammpsParser::readHeader(std::istream &in, Frame &f) {
     }
 
     // Next line is the timestep integer
-    std::getline(in, line);
+    if(!std::getline(in, line)) return false;
     f.timestep = std::stoi(line);
-    
-    // Skip "ITEM: NUMBER OF ATOMS" and read the atom count
-    std::getline(in, line);
-    std::getline(in, line);
-    
-    // Reserve vectors to avoid reallocations
-    f.natoms = std::stoi(line);
+
+    f.natoms = 0;
     f.positions.clear();
     f.types.clear();
     f.ids.clear();
@@ -1617,10 +1673,7 @@ bool LammpsParser::readHeader(std::istream &in, Frame &f) {
     f.atomProperties.clear();
     f.atomColumnOrder.clear();
     f.atomColumnsScaled = false;
-    f.positions.reserve(f.natoms);
-    f.types.reserve(f.natoms);
-    f.ids.reserve(f.natoms);
-    
+
     return true;
 }
 
@@ -1629,10 +1682,21 @@ bool LammpsParser::readHeader(std::istream &in, Frame &f) {
 // then reads three lines of lower and upper bounds, optionally with
 // tilt for triciclic cells Constructs an AffineTransformation
 // for the box matrix and sets PBC flags on the frame.
-bool LammpsParser::readBoxBounds(std::istream &in, Frame &f){
+bool LammpsParser::readBoxBounds(std::istream &in, Frame &f, std::string &atomsHeaderLine){
     std::string line;
+    bool haveNatoms = false;
+    bool haveBox = false;
+    bool pbcX = true, pbcY = true, pbcZ = true;
+    double lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0}, tilt[3] = {0.0, 0.0, 0.0};
+
+    // LAMMPS does not fix the order of the header ITEMs: "NUMBER OF ATOMS" and
+    // "BOX BOUNDS" can appear in either order. The only reliable end-of-header
+    // marker is "ITEM: ATOMS", which belongs to readAtomData — so when we reach
+    // it we hand that line out via atomsHeaderLine (no stream rewind, which
+    // would break on non-seekable streams such as pipes/FIFOs).
     while(std::getline(in, line)){
-        if(line.find("ITEM: BOX BOUNDS") != std::string::npos){
+        if(line.find("ITEM: ATOMS") != std::string::npos){
+            atomsHeaderLine = line;
             break;
         }
 
@@ -1640,49 +1704,59 @@ bool LammpsParser::readBoxBounds(std::istream &in, Frame &f){
             return false;
         }
 
-        std::string value;
-        if(!std::getline(in, value)){
-            return false;
-        }
+        if(line.find("ITEM: BOX BOUNDS") != std::string::npos){
+            // Tokenize header to extract "pp" flags for each axis
+            std::istringstream hdr(line);
+            std::vector<std::string> hdrTokens;
+            std::string tok;
+            while(hdr >> tok){
+                hdrTokens.push_back(tok);
+            }
+            if(hdrTokens.size() >= 6){
+                pbcX = (hdrTokens[hdrTokens.size()-3] == "pp");
+                pbcY = (hdrTokens[hdrTokens.size()-2] == "pp");
+                pbcZ = (hdrTokens[hdrTokens.size()-1] == "pp");
+            }else{
+                pbcX = pbcY = pbcZ = true;
+            }
 
-        const std::string key = trimCopy(std::string_view(line).substr(6));
-        f.headerOrder.push_back(key);
-        f.headerProperties[key] = trimCopy(value);
+            for(int i = 0; i < 3; ++i){
+                if (!std::getline(in, line)) return false;
+                std::istringstream ss(line);
+                if(!(ss >> lo[i] >> hi[i])) return false;
+                double temp_tilt;
+                if(ss >> temp_tilt){
+                    tilt[i] = temp_tilt;
+                }
+                // If no tilt factor, it remains 0.0 (orthogonal box)
+            }
+            haveBox = true;
+        }else{
+            std::string value;
+            if(!std::getline(in, value)){
+                return false;
+            }
+            const std::string key = trimCopy(std::string_view(line).substr(6));
+            if(key == "NUMBER OF ATOMS"){
+                f.natoms = std::stoi(trimCopy(value));
+                f.positions.reserve(f.natoms);
+                f.types.reserve(f.natoms);
+                f.ids.reserve(f.natoms);
+                haveNatoms = true;
+            }else{
+                f.headerOrder.push_back(key);
+                f.headerProperties[key] = trimCopy(value);
+            }
+        }
     }
-    if(line.find("ITEM: BOX BOUNDS") == std::string::npos){
+    if(atomsHeaderLine.empty()){
         return false;
     }
-
-    // Tokenize header to extract "pp" flags for each axis
-    std::istringstream hdr(line);
-    std::vector<std::string> hdrTokens;
-    std::string tok;
-    while(hdr >> tok){
-        hdrTokens.push_back(tok);
+    if(!haveBox){
+        return false;
     }
-
-    bool pbcX = false, pbcY = false, pbcZ = false;
-    if(hdrTokens.size() >= 6){
-        // Las three tokens indicate periodicity on x, y, z axes
-        pbcX = (hdrTokens[hdrTokens.size()-3] == "pp");
-        pbcY = (hdrTokens[hdrTokens.size()-2] == "pp");
-        pbcZ = (hdrTokens[hdrTokens.size()-1] == "pp");
-    }else{
-        pbcX = pbcY = pbcZ = true;
-    }
-
-    double lo[3], hi[3], tilt[3] = {0.0, 0.0, 0.0};
-    for(int i = 0; i < 3; ++i){
-        if (!std::getline(in, line)) return false;
-        std::istringstream ss(line);
-        if(!(ss >> lo[i] >> hi[i])) return false;
-        
-        // Try to read tilt factor if present (triclinic box)
-        double temp_tilt;
-        if(ss >> temp_tilt) {
-            tilt[i] = temp_tilt;
-        }
-        // If no tilt factor, it remains 0.0 (orthogonal box)
+    if(!haveNatoms || f.natoms <= 0){
+        return false;
     }
 
     // Adjust min/max for triclinic tilf offsets
@@ -1716,15 +1790,18 @@ bool LammpsParser::readBoxBounds(std::istream &in, Frame &f){
 // Expects "ITEM: ATOMS" followed by columns headers (e.g. id, type, x, y, z or xs, ys, zs).
 // Determines which columns, refer to ID, type, and positions. Reads each line,
 // converts fractional to Cartesian if needed, and stores id/type/position.
-bool LammpsParser::readAtomData(std::istream &in, Frame &f){
+bool LammpsParser::readAtomData(std::istream &in, Frame &f, const std::string &atomsHeaderLine){
     std::string line;
-    if(!std::getline(in, line) || line.find("ITEM: ATOMS") == std::string::npos){
+    // The "ITEM: ATOMS ..." column header was already consumed by readBoxBounds
+    // (the header ITEMs are order-independent, so it scans up to this line) and
+    // handed to us here.
+    if(atomsHeaderLine.find("ITEM: ATOMS") == std::string::npos){
         return false;
     }
 
     LineView headerLine{
-        .begin = line.data(),
-        .end = line.data() + line.size()
+        .begin = atomsHeaderLine.data(),
+        .end = atomsHeaderLine.data() + atomsHeaderLine.size()
     };
     const AtomColumns cols = parseAtomColumns(headerLine);
     if(!cols.valid){

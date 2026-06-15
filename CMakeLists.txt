@@ -104,6 +104,13 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 # Install main library and embedded libs
 install(TARGETS ${PROJECT_NAME} mwm_csp geogram DESTINATION lib)
 
+# volt-dump-transform — daemon-side LAMMPS dump mutator (slice / select / merge).
+# Links the coretoolkit target so it inherits the LAMMPS parser, the expression
+# engine and duckdb (Parquet reader) transitively.
+add_executable(volt-dump-transform tools/dump_transform.cpp)
+target_link_libraries(volt-dump-transform PRIVATE ${PROJECT_NAME})
+install(TARGETS volt-dump-transform DESTINATION bin)
+
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC)
 set(VOLT_RELEASE_ARCH_FLAGS -mtune=generic)
 if(VOLT_ENABLE_NATIVE_OPTIMIZATIONS)

@@ -109,6 +109,20 @@ install(TARGETS ${PROJECT_NAME} mwm_csp geogram DESTINATION lib)
 # engine and duckdb (Parquet reader) transitively.
 add_executable(volt-dump-transform tools/dump_transform.cpp)
 target_link_libraries(volt-dump-transform PRIVATE ${PROJECT_NAME})
+# The daemon ships this binary inside its container and runs it on whatever Linux
+# the user enrolled (the dev daemon runs in an Ubuntu 24.04 / glibc 2.39 image).
+# Two portability hazards: (1) a binary built against a newer host glibc fails to
+# load with `GLIBC_x.yy not found` — fixed by BUILDING the binary in a glibc-2.39
+# image (see tools/build-dump-transform.sh, which compiles inside ubuntu:24.04);
+# (2) libstdc++/libgcc version skew — fixed by linking those statically. oneTBB
+# (conan) is shared-only so the binary keeps a libtbb.so.12 dependency, which the
+# daemon image satisfies (TBB is an apt/runtime lib); RPATH $ORIGIN lets a
+# co-located libtbb.so.12 win if present.
+if(UNIX AND NOT APPLE)
+    target_link_options(volt-dump-transform PRIVATE
+        -static-libstdc++ -static-libgcc
+        "LINKER:-rpath,$ORIGIN")
+endif()
 install(TARGETS volt-dump-transform DESTINATION bin)
 
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC)

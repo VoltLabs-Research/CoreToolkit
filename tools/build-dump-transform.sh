@@ -19,12 +19,16 @@ DAEMON_BIN_DIR="${ECOSYSTEM_DIR}/app/ClusterDaemon/src/modules/analysis/infrastr
 
 echo "==> Building volt-dump-transform in ubuntu:24.04 (glibc 2.39, matches the daemon image)"
 
-# Build inside the container. We install the toolchain + conan, then configure
-# and build only the volt-dump-transform target. The CoreToolkit checkout is
-# mounted read-write so conan/cmake artifacts land in a container-only build dir
-# (build-docker) that never collides with the host's build-local.
+# Build inside the container as root (a bare ubuntu:24.04 needs apt to install
+# the toolchain + conan). The CoreToolkit checkout is mounted read-write; conan
+# writes a CMakeUserPresets.json into /src and leaves a build-docker/ dir — the
+# container installs the binary into the daemon bin dir, then cleans build-docker
+# and restores CMakeUserPresets.json from git BEFORE exiting (while it still has
+# root), so the host is left clean and no root-owned artifacts remain.
+DAEMON_BIN_IN_CONTAINER="/daemon-bin"
 docker run --rm \
     -v "${CORETOOLKIT_DIR}:/src" \
+    -v "${DAEMON_BIN_DIR}:${DAEMON_BIN_IN_CONTAINER}" \
     -w /src \
     ubuntu:24.04 \
     bash -euo pipefail -c '
@@ -38,20 +42,31 @@ docker run --rm \
         rm -rf /src/build-docker
         conan install /src --output-folder=/src/build-docker --build=missing \
             -s compiler.cppstd=17 -o "boost/*:without_stacktrace=True" >/dev/null
-        cmake --preset conan-release \
-            -S /src -B /src/build-docker/build/Release >/dev/null
+        # Configure with the conan toolchain directly (NOT --preset): the host
+        # CMakeUserPresets.json is mounted in /src and would collide with the
+        # container-generated one ("Duplicate preset: conan-release").
+        cmake -S /src -B /src/build-docker/build/Release \
+            -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE=/src/build-docker/build/Release/generators/conan_toolchain.cmake \
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null
         cmake --build /src/build-docker/build/Release --target volt-dump-transform -j"$(nproc)"
+        BIN=/src/build-docker/build/Release/volt-dump-transform
         # sanity: it must run in THIS glibc-2.39 environment
-        /src/build-docker/build/Release/volt-dump-transform 2>&1 | head -1 || true
+        "$BIN" 2>&1 | head -1 || true
+        # install into the daemon bin dir (mounted), then clean up everything the
+        # build left in the mounted source tree while we still have root.
+        install -m 0755 "$BIN" "'"${DAEMON_BIN_IN_CONTAINER}"'/volt-dump-transform"
+        rm -rf /src/build-docker
+        if [ -d /src/.git ] || git -C /src rev-parse --git-dir >/dev/null 2>&1; then
+            git -C /src checkout -- CMakeUserPresets.json 2>/dev/null || true
+        fi
     '
 
-BUILT_BINARY="${CORETOOLKIT_DIR}/build-docker/build/Release/volt-dump-transform"
-if [[ ! -x "${BUILT_BINARY}" ]]; then
-    echo "ERROR: build did not produce ${BUILT_BINARY}" >&2
+INSTALLED="${DAEMON_BIN_DIR}/volt-dump-transform"
+if [[ ! -x "${INSTALLED}" ]]; then
+    echo "ERROR: build did not install ${INSTALLED}" >&2
     exit 1
 fi
+echo "==> Installed glibc-2.39 binary -> ${INSTALLED}"
 
-mkdir -p "${DAEMON_BIN_DIR}"
-cp "${BUILT_BINARY}" "${DAEMON_BIN_DIR}/volt-dump-transform"
-chmod +x "${DAEMON_BIN_DIR}/volt-dump-transform"
-echo "==> Installed glibc-2.39 binary -> ${DAEMON_BIN_DIR}/volt-dump-transform"

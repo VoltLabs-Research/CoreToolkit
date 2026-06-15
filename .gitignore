@@ -57,3 +57,4 @@ output/
 *.tar.zst
 *.sha256
 CLAUDE.md
+build-docker/

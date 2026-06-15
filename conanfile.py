@@ -52,7 +52,7 @@ class CoreToolkitConan(ConanFile):
         "duckdb/*:with_sqlsmith": False,
         "duckdb/*:with_shell": False,
     }
-    exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "cmake/*"
+    exports_sources = "CMakeLists.txt", "include/*", "src/*", "dependencies/*", "cmake/*", "tools/*"
 
     def layout(self):
         cmake_layout(self)

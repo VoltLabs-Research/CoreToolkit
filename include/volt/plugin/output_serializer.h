@@ -19,6 +19,14 @@ struct OutputConfig {
     BucketResolver bucketResolver;
     // Emits the plugin's per-atom property columns (coordination, csp, color...).
     PerAtomColumnWriter perAtomColumnWriter;
+    // Optional `structure_id` resolver. When empty, structure_id is the first-seen
+    // ordinal of the atom's bucket; classifiers (or mid-pipeline stages carrying an
+    // upstream classification forward) provide the real StructureType code here.
+    StructureIdResolver resolveStructureId;
+    // structure_id/structure_name are OPT-IN: set true only in structural-identification
+    // plugins. Leaving the default off keeps a non-structural stage from clobbering an
+    // upstream classifier's structure_id during the daemon's per-column pipeline merge.
+    bool includeStructureColumns = false;
 };
 
 inline void serializePluginOutput(
@@ -38,7 +46,8 @@ inline void serializePluginOutput(
 
     if (config.bucketResolver) {
         const std::string atomsPath = outputBase + "_atoms.parquet";
-        streamAtomsToParquet(atomsPath, frame, config.bucketResolver, config.perAtomColumnWriter);
+        streamAtomsToParquet(atomsPath, frame, config.bucketResolver, config.perAtomColumnWriter,
+                             config.resolveStructureId, config.includeStructureColumns);
         spdlog::info("Exported atoms data to: {}", atomsPath);
     }
 }

@@ -86,19 +86,19 @@ public:
 	}
 
 	explicit Matrix_3(const T* d) noexcept{
-		(*this)[0] = { d[0], d[3], d[6] }; 
-        (*this)[1] = { d[1], d[4], d[7] }; 
+		(*this)[0] = { d[0], d[3], d[6] };
+        (*this)[1] = { d[1], d[4], d[7] };
         (*this)[2] = { d[2], d[5], d[8] };
 	}
 
-	friend constexpr Matrix_3 operator-(const Matrix_3& A, Identity /*unused*/) noexcept{
+	friend constexpr Matrix_3 operator-(const Matrix_3& A, Identity) noexcept{
         return Matrix_3(
             A(0,0)-T(1), A(0,1),      A(0,2),
             A(1,0),      A(1,1)-T(1), A(1,2),
             A(2,0),      A(2,1),      A(2,2)-T(1) );
     }
 
-	friend constexpr Matrix_3 operator-(Identity /*unused*/, const Matrix_3& A) noexcept{
+	friend constexpr Matrix_3 operator-(Identity, const Matrix_3& A) noexcept{
         return Matrix_3(
             T(1)-A(0,0), -A(0,1),     -A(0,2),
             -A(1,0),     T(1)-A(1,1), -A(1,2),
@@ -173,7 +173,7 @@ public:
 		}
 		T det = determinant();
 		if(det == 0) throw std::runtime_error("Matrix3 cannot be inverted: determinant is zero.");
-		
+
         T inv_det = T(1) / det;
 		return Matrix_3(((*this)[1][1]*(*this)[2][2] - (*this)[1][2]*(*this)[2][1])*inv_det,
 						((*this)[2][0]*(*this)[1][2] - (*this)[1][0]*(*this)[2][2])*inv_det,
@@ -298,7 +298,7 @@ inline Matrix_3<T> Matrix_3<T>::rotation(T ai, T aj, T ak, EulerAxisSequence axi
 	int i = firstaxis;
 	int j = (firstaxis + 1 + parity) % 3;
 	int k = (firstaxis + 2 - parity) % 3;
-	
+
 	if(frame) std::swap(ai, ak);
 	if(parity) { aj = -aj; }
 

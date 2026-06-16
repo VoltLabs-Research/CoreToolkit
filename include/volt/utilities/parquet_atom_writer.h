@@ -47,18 +47,24 @@ using StructureIdResolver = std::function<int(std::size_t atomIndex)>;
 
 // Streams a per-atom Parquet table (ZSTD) for a frame. Fixed columns:
 //   atom_index (uint32), id (uint64), x/y/z (double), bucket (string),
-//   structure_id (int32), structure_name (string), cluster_id (int32)
-// plus any dynamic columns emitted via writePerAtomColumns.
+//   cluster_id (int32), plus any dynamic columns emitted via writePerAtomColumns.
 //
 // This single table serves all per-atom consumers: coloring/filtering query the
 // property columns, the GLB export reads x/y/z + bucket, and listings/sub-listings
 // are GROUP BY bucket / WHERE bucket = X.
+//
+// structure_id/structure_name are OPT-IN (includeStructureColumns=true): only
+// structural-identification plugins (PTM, ACNA, PSM, ackland-jones, chill-plus,
+// identify-diamond, opendxa, structure-identification) emit them. Any other plugin
+// must leave the default — emitting them lets a non-structural stage clobber an
+// upstream classifier's structure_id during the daemon's per-column pipeline merge.
 void streamAtomsToParquet(
     const std::string& filePath,
     const LammpsParser::Frame& frame,
     const BucketResolver& resolveBucket,
     const PerAtomColumnWriter& writePerAtomColumns = {},
-    const StructureIdResolver& resolveStructureId = {}
+    const StructureIdResolver& resolveStructureId = {},
+    bool includeStructureColumns = false
 );
 
 }

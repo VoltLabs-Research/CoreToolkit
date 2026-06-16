@@ -143,7 +143,8 @@ void streamAtomsToParquet(
     const LammpsParser::Frame& frame,
     const BucketResolver& resolveBucket,
     const PerAtomColumnWriter& writePerAtomColumns,
-    const StructureIdResolver& resolveStructureId
+    const StructureIdResolver& resolveStructureId,
+    bool includeStructureColumns
 ){
     const std::size_t natoms = static_cast<std::size_t>(frame.natoms);
 
@@ -196,7 +197,9 @@ void streamAtomsToParquet(
         std::string ddl =
             "CREATE TABLE atoms("
             "atom_index UINTEGER, id UBIGINT, x DOUBLE, y DOUBLE, z DOUBLE, "
-            "bucket VARCHAR, structure_id INTEGER, structure_name VARCHAR";
+            "bucket VARCHAR";
+        if(includeStructureColumns)
+            ddl += ", structure_id INTEGER, structure_name VARCHAR";
         for(const auto& col : dyn.columns){
             ddl += ", ";
             ddl += quoteIdent(col.name);
@@ -216,8 +219,10 @@ void streamAtomsToParquet(
                 appender.Append<double>(ys[i]);
                 appender.Append<double>(zs[i]);
                 appender.Append(duckdb::Value(buckets[i]));
-                appender.Append<std::int32_t>(structureIds[i]);
-                appender.Append(duckdb::Value(buckets[i])); // structure_name == bucket
+                if(includeStructureColumns){
+                    appender.Append<std::int32_t>(structureIds[i]);
+                    appender.Append(duckdb::Value(buckets[i])); // structure_name == bucket
+                }
                 for(auto& col : dyn.columns){
                     appender.Append(col.values[i]);
                 }

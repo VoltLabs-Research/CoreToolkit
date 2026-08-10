@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -21,11 +22,10 @@ struct CliOption {
     std::string type;
     std::string help;
     std::string defaultVal;
+    std::vector<std::string> values;
+    std::string bundleDefault;
 };
 
-// How many trajectory frames a plugin consumes per invocation. Single is the
-// classic one-frame path; ReferencePair/Window/All are the multi-frame modes
-// fed by the daemon's TrajectoryWindow node (workstream 15).
 enum class FrameMode {
     Single,
     ReferencePair,
@@ -33,16 +33,15 @@ enum class FrameMode {
     All
 };
 
+using DescriptorRefineFn = std::function<void(std::vector<CliOption>&, const OptsMap&)>;
+
 struct PluginDescriptor {
     std::string name;
     std::string description;
     std::vector<CliOption> options;
-    // Single-frame reference-frame opt-in (legacy displacements/atomic-strain
-    // path via --reference). Independent of frameMode below.
     bool needsReferenceFrame = false;
-    // Multi-frame execution mode. When != Single the binary is launched through
-    // pluginMainMultiFrame with the full window of frames.
     FrameMode frameMode = FrameMode::Single;
+    DescriptorRefineFn refine;
 };
 
 using PluginRunFn = std::function<json(
@@ -52,10 +51,6 @@ using PluginRunFn = std::function<json(
     const std::string& outputBase
 )>;
 
-// Multi-frame run-fn: receives the localized window of parsed frames (in window
-// order) plus the index of the primary frame (the one per-frame outputs are
-// keyed to). `mode: 'all'` passes the whole trajectory; `window` a centered
-// slice; `referencePair` exactly [reference, primary].
 using PluginMultiFrameRunFn = std::function<json(
     const std::map<std::string, std::string>& opts,
     const std::vector<LammpsParser::Frame>& frames,
@@ -63,26 +58,95 @@ using PluginMultiFrameRunFn = std::function<json(
     const std::string& outputBase
 )>;
 
+inline constexpr int kDescriptorVersion = 1;
+
+inline std::string frameModeName(FrameMode mode) {
+    switch (mode) {
+        case FrameMode::ReferencePair: return "referencePair";
+        case FrameMode::Window:        return "window";
+        case FrameMode::All:           return "all";
+        case FrameMode::Single:        break;
+    }
+    return "single";
+}
+
+inline std::vector<CliOption> effectiveOptions(const PluginDescriptor& desc) {
+    std::vector<CliOption> options = desc.options;
+    if (desc.needsReferenceFrame) {
+        options.push_back({"--reference", "path", "Reference LAMMPS dump file.", "", {}, ""});
+    }
+    if (desc.frameMode != FrameMode::Single) {
+        options.push_back({"--frames", "path-list", "Comma/space-separated window dump files.", "", {}, ""});
+        options.push_back({"--primary", "int", "Index of the primary frame in the window.", "0", {}, ""});
+    }
+    options.push_back({"--threads", "int", "Max worker threads.", "auto", {}, ""});
+    return options;
+}
+
+inline json describePlugin(const PluginDescriptor& desc, const OptsMap& opts = {}) {
+    auto resolved = effectiveOptions(desc);
+    if (desc.refine) {
+        desc.refine(resolved, opts);
+    }
+    json options = json::array();
+    for (const auto& opt : resolved) {
+        json entry{
+            {"flag", opt.name},
+            {"type", opt.type},
+            {"help", opt.help},
+        };
+        if (!opt.defaultVal.empty())   entry["default"] = opt.defaultVal;
+        if (!opt.values.empty())       entry["values"] = opt.values;
+        if (!opt.bundleDefault.empty()) entry["bundleDefault"] = opt.bundleDefault;
+        options.push_back(std::move(entry));
+    }
+    return json{
+        {"descriptor", kDescriptorVersion},
+        {"name", desc.name},
+        {"description", desc.description},
+        {"frameMode", frameModeName(desc.frameMode)},
+        {"needsReferenceFrame", desc.needsReferenceFrame},
+        {"positional", json::array({"input", "output_base"})},
+        {"options", std::move(options)},
+    };
+}
+
 inline void showPluginUsage(const std::string& argv0, const PluginDescriptor& desc) {
     CLI::printUsageHeader(argv0, "Volt - " + desc.description);
-    for (const auto& opt : desc.options) {
+    for (const auto& opt : effectiveOptions(desc)) {
         std::cerr << "  " << opt.name << " <" << opt.type << ">";
         const std::size_t pad = (opt.name.size() + opt.type.size() + 4 < 32)
             ? (32 - opt.name.size() - opt.type.size() - 4) : 2;
         std::cerr << std::string(pad, ' ') << opt.help;
+        if (!opt.values.empty()) {
+            std::cerr << " (";
+            for (std::size_t i = 0; i < opt.values.size(); ++i)
+                std::cerr << (i ? "|" : "") << opt.values[i];
+            std::cerr << ")";
+        }
         if (!opt.defaultVal.empty())
             std::cerr << " [default: " << opt.defaultVal << "]";
         std::cerr << "\n";
     }
-    if (desc.needsReferenceFrame) {
-        std::cerr << "  --reference <file>            Reference LAMMPS dump file.\n";
-    }
-    if (desc.frameMode != FrameMode::Single) {
-        std::cerr << "  --frames <f1,f2,...>          Comma/space-separated window dump files.\n";
-        std::cerr << "  --primary <index>             Index of the primary frame in the window. [default: 0]\n";
-    }
-    std::cerr << "  --threads <int>               Max worker threads. [default: auto]\n";
+    std::cerr << "  --describe                     Print this plugin's option table as JSON and exit.\n";
     CLI::printHelpOption();
+}
+
+inline std::optional<int> handleIntrospection(
+    const std::string& argv0,
+    const PluginDescriptor& desc,
+    const OptsMap& opts,
+    const std::string& filename
+) {
+    if (CLI::hasOption(opts, "--describe")) {
+        std::cout << describePlugin(desc, opts).dump(2) << '\n';
+        return 0;
+    }
+    if (CLI::hasOption(opts, "--help") || filename.empty()) {
+        showPluginUsage(argv0, desc);
+        return filename.empty() ? 1 : 0;
+    }
+    return std::nullopt;
 }
 
 namespace Detail {
@@ -97,9 +161,6 @@ inline oneapi::tbb::global_control makeThreadControl(const OptsMap& opts) {
         static_cast<std::size_t>(requestedThreads));
 }
 
-// Splits a `--frames` token list on commas and whitespace. The daemon emits the
-// localized window paths space-joined via `{{ trajectory-window.framePaths }}`,
-// but the CLI parser also collapses each into one option value, so accept both.
 inline std::vector<std::string> splitFrameList(const std::string& raw) {
     std::vector<std::string> files;
     std::string current;
@@ -126,7 +187,7 @@ inline bool reportFailure(const json& result, const PluginDescriptor& desc) {
     return false;
 }
 
-} // namespace Detail
+}
 
 inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, PluginRunFn run) {
     if (argc < 2) {
@@ -137,9 +198,8 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     std::string filename, outputBase;
     auto opts = CLI::parseArgs(argc, argv, filename, outputBase);
 
-    if (CLI::hasOption(opts, "--help") || filename.empty()) {
-        showPluginUsage(argv[0], desc);
-        return filename.empty() ? 1 : 0;
+    if (auto exitCode = handleIntrospection(argv[0], desc, opts, filename)) {
+        return *exitCode;
     }
 
     auto parallelControl = Detail::makeThreadControl(opts);
@@ -179,10 +239,6 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     return Detail::reportFailure(result, desc) ? 1 : 0;
 }
 
-// Multi-frame entrypoint. The window file list arrives via `--frames`; the
-// primary frame index via `--primary`. The first positional argument doubles as
-// both a member of the window (so existing positional-path wiring keeps working)
-// and the output-base anchor. STDOUT stays reserved for IPC; logs go to STDERR.
 inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& desc, PluginMultiFrameRunFn run) {
     if (argc < 2) {
         showPluginUsage(argv[0], desc);
@@ -192,17 +248,14 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     std::string filename, outputBase;
     auto opts = CLI::parseArgs(argc, argv, filename, outputBase);
 
-    if (CLI::hasOption(opts, "--help") || filename.empty()) {
-        showPluginUsage(argv[0], desc);
-        return filename.empty() ? 1 : 0;
+    if (auto exitCode = handleIntrospection(argv[0], desc, opts, filename)) {
+        return *exitCode;
     }
 
     auto parallelControl = Detail::makeThreadControl(opts);
 
     CLI::initLogging(desc.name);
 
-    // The window is the explicit `--frames` list when present; otherwise the
-    // single positional file (single-frame == window of one).
     std::vector<std::string> frameFiles;
     const std::string framesArg = CLI::getString(opts, "--frames");
     if (!framesArg.empty()) {
@@ -231,7 +284,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     return Detail::reportFailure(result, desc) ? 1 : 0;
 }
 
-} // namespace Volt::Plugin
+}
 
 #define VOLT_PLUGIN_MAIN(descriptor, ...) \
     int main(int argc, char* argv[]) { \

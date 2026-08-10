@@ -20,7 +20,7 @@ inline std::string formatDefault(double v) {
     }
     return s;
 }
-} // namespace Detail
+}
 
 template<typename Service>
 struct OptionBinding {
@@ -76,16 +76,44 @@ OptionBinding<S> opt(CliOption meta, std::function<void(S&, const OptsMap&)> fn)
     return {std::move(meta), std::move(fn)};
 }
 
+namespace Detail {
+inline std::vector<std::string> splitAllowed(const char* allowed) {
+    std::vector<std::string> values;
+    std::string current;
+    for (const char* c = allowed; *c; ++c) {
+        if (*c == '|') {
+            if (!current.empty()) values.push_back(std::move(current));
+            current.clear();
+        } else {
+            current.push_back(*c);
+        }
+    }
+    if (!current.empty()) values.push_back(std::move(current));
+    return values;
+}
+}
+
 template<typename S>
 OptionBinding<S> optLattice(const char* name, const char* allowed, const char* def,
                             void(S::*setter)(LatticeStructureType)) {
     return {
-        {name, "string", allowed, def},
+        {name, "enum", "Crystal structure to match against.", def, Detail::splitAllowed(allowed)},
         [setter, name, dv = std::string(def)](S& s, const OptsMap& opts) {
             LatticeStructureType t{};
             parseLatticeStructureType(dv, t);
             parseLatticeStructureType(CLI::getString(opts, name, dv), t);
             (s.*setter)(t);
+        }
+    };
+}
+
+template<typename S>
+OptionBinding<S> optEnum(const char* name, const char* help, const char* allowed, const char* def,
+                         void(S::*setter)(std::string)) {
+    return {
+        {name, "enum", help, def, Detail::splitAllowed(allowed)},
+        [setter, name, dv = std::string(def)](S& s, const OptsMap& opts) {
+            (s.*setter)(CLI::getString(opts, name, dv));
         }
     };
 }
@@ -113,4 +141,4 @@ std::vector<CliOption> optionsMeta(const std::vector<OptionBinding<S>>& bindings
     return result;
 }
 
-} // namespace Volt::Plugin
+}

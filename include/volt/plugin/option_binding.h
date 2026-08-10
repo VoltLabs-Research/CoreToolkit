@@ -107,17 +107,6 @@ OptionBinding<S> optLattice(const char* name, const char* allowed, const char* d
     };
 }
 
-template<typename S>
-OptionBinding<S> optEnum(const char* name, const char* help, const char* allowed, const char* def,
-                         void(S::*setter)(std::string)) {
-    return {
-        {name, "enum", help, def, Detail::splitAllowed(allowed)},
-        [setter, name, dv = std::string(def)](S& s, const OptsMap& opts) {
-            (s.*setter)(CLI::getString(opts, name, dv));
-        }
-    };
-}
-
 inline std::optional<json> requireOptions(const OptsMap& opts, std::initializer_list<const char*> required) {
     for (const char* key : required) {
         if (!CLI::hasOption(opts, key))

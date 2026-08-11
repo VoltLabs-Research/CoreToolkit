@@ -74,6 +74,20 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.set_property("cmake_target_name", "coretoolkit::coretoolkit")
         self.cpp_info.libs = ["coretoolkit", "mwm_csp", "geogram"]
         self.cpp_info.defines = ["GEO_STATIC_LIBS"]
+
+        # geogram is built with OpenMP so that its parallel Delaunay backend (PDEL)
+        # has a working thread manager — OMPThreadManager is the only real one in the
+        # amalgamation and it sits behind #ifdef GEO_OPENMP. Since libgeogram.a then
+        # contains unresolved GOMP_*/omp_* references, every consumer has to link the
+        # OpenMP runtime too; a static library cannot carry that for them.
+        # VOLT_HAVE_PARALLEL_DELAUNAY is what opendxa keys the PDEL path off.
+        if self.settings.os in ("Linux", "FreeBSD"):
+            self.cpp_info.system_libs.append("gomp")
+            self.cpp_info.cflags.append("-fopenmp")
+            self.cpp_info.cxxflags.append("-fopenmp")
+            self.cpp_info.exelinkflags.append("-fopenmp")
+            self.cpp_info.sharedlinkflags.append("-fopenmp")
+            self.cpp_info.defines.append("VOLT_HAVE_PARALLEL_DELAUNAY")
         self.cpp_info.requires = [
             "boost::headers",
             "onetbb::onetbb",

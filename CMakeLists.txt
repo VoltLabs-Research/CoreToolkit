@@ -32,7 +32,33 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(VOLT_ENABLE_NATIVE_OPTIMIZATIONS "Enable CPU-specific optimizations such as -march=native" OFF)
+option(VOLT_ENABLE_NATIVE_OPTIMIZATIONS "Tune for the build machine's exact CPU (-march=native). Not portable." OFF)
+
+# Baseline ISA for Release builds.
+#
+# The previous default was -mtune=generic, which leaves the *instruction set* at
+# plain x86-64 (SSE2 only): no AVX2, no FMA. Measured on the vendored PTM library
+# (256k-atom FCC Al, 16 threads), moving to an AVX2+FMA baseline is worth
+# 1.18-1.32x depending on the stage — the code is branch-heavy and scalar, so the
+# autovectoriser has limited room, but the gain is free.
+#
+# x86-64-v3 == AVX2 + FMA + BMI2 + MOVBE, i.e. Haswell (2013) / Excavator (2015)
+# and newer. It keeps the binary portable across every machine we ship to, unlike
+# -march=native which bakes in the build host's exact microarchitecture.
+#
+# Set VOLT_BASELINE_ARCH to something else (e.g. x86-64-v2 for pre-2013 hardware,
+# or x86-64 to restore the old behaviour) if a deployment target requires it.
+set(VOLT_BASELINE_ARCH "x86-64-v3" CACHE STRING
+	"Baseline -march for Release builds (x86-64, x86-64-v2, x86-64-v3, x86-64-v4)")
+
+if(VOLT_ENABLE_NATIVE_OPTIMIZATIONS)
+	set(VOLT_RELEASE_ARCH_FLAGS -march=native)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
+	set(VOLT_RELEASE_ARCH_FLAGS -march=${VOLT_BASELINE_ARCH})
+else()
+	# Non-x86 (arm64 etc): no -march spelling in common, just tune generically.
+	set(VOLT_RELEASE_ARCH_FLAGS -mtune=generic)
+endif()
 
 # Build type & optimization
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
@@ -75,6 +101,40 @@ target_include_directories(geogram PUBLIC
 )
 if(VOLT_BOOST_TARGET)
 	target_link_libraries(geogram PUBLIC ${VOLT_BOOST_TARGET})
+endif()
+
+# geogram needs -frounding-math: its exact geometric predicates rely on the FPU
+# not being allowed to assume a fixed rounding mode. Without it the compiler may
+# reorder/contract arithmetic in ways that break the orientation/insphere tests.
+target_compile_options(geogram PRIVATE -frounding-math -ffp-contract=off)
+
+# Parallel Delaunay (PDEL).
+#
+# ParallelDelaunay3d is guarded behind GEOGRAM_WITH_PDEL in Delaunay_psm.cpp; if
+# the macro is absent the "PDEL" backend is never even registered with the factory
+# (see the geo_register_Delaunay_creator calls). Separately, the *only* real thread
+# manager in the amalgamation is OMPThreadManager, which lives inside an
+# `#ifdef GEO_OPENMP`. Building geogram without OpenMP therefore leaves PDEL
+# handing work to threads that nothing ever schedules — which is exactly what the
+# "PDEL hangs on a 160-core EPYC" symptom (threads spinning at 99.9% CPU, or a
+# single sleeping thread) looks like from the outside.
+#
+# With both enabled, PDEL produces a tessellation with a cell count identical to
+# the serial BDEL backend and is 2.4-3.0x faster (measured, 256k-864k atoms,
+# 8 cores/16 threads). See DelaunayTessellation::generateTessellation for the
+# runtime thread cap.
+option(VOLT_ENABLE_PARALLEL_DELAUNAY "Build geogram's ParallelDelaunay3d (PDEL) backend" ON)
+if(VOLT_ENABLE_PARALLEL_DELAUNAY)
+	find_package(OpenMP)
+	if(OpenMP_CXX_FOUND)
+		target_compile_definitions(geogram PUBLIC GEOGRAM_WITH_PDEL VOLT_HAVE_PARALLEL_DELAUNAY)
+		target_link_libraries(geogram PUBLIC OpenMP::OpenMP_CXX)
+		message(STATUS "coretoolkit: geogram parallel Delaunay (PDEL) enabled")
+	else()
+		message(WARNING
+			"coretoolkit: OpenMP not found — geogram falls back to the serial BDEL "
+			"Delaunay backend. PDEL without OpenMP would deadlock, so it stays off.")
+	endif()
 endif()
 
 file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
@@ -125,12 +185,8 @@ if(UNIX AND NOT APPLE)
 endif()
 install(TARGETS volt-dump-transform DESTINATION bin)
 
-# HPC optimization flags for Release builds (propagate to all consumers via PUBLIC)
-set(VOLT_RELEASE_ARCH_FLAGS -mtune=generic)
-if(VOLT_ENABLE_NATIVE_OPTIMIZATIONS)
-    set(VOLT_RELEASE_ARCH_FLAGS -march=native)
-endif()
-
+# HPC optimization flags for Release builds (propagate to all consumers via PUBLIC).
+# VOLT_RELEASE_ARCH_FLAGS is set once near the top of this file.
 target_compile_options(${PROJECT_NAME} PUBLIC
 	$<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:
 		-O3 ${VOLT_RELEASE_ARCH_FLAGS} -fno-math-errno -fno-trapping-math -ffp-contract=fast

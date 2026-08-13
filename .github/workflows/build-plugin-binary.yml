@@ -8,6 +8,11 @@ on:
         required: false
         default: main
         type: string
+      lammpsio_ref:
+        description: LammpsIO ref used for the checkout of CoreToolkit's reader dependency.
+        required: false
+        default: main
+        type: string
       dependency_repos:
         description: Newline-separated plugin repositories that must be exported to Conan before building.
         required: false
@@ -55,6 +60,18 @@ jobs:
           ref: ${{ inputs.coretoolkit_ref }}
           path: coretoolkit
 
+      # CoreToolkit reads trajectories through LammpsIO, so every plugin build needs it
+      # in the Conan cache. It is checked out here rather than listed in each plugin's
+      # `dependency_repos` because it is CoreToolkit's dependency, not the plugin's --
+      # otherwise every plugin repo has to be edited whenever CoreToolkit changes what
+      # it depends on, which is exactly how `lammpsio/[>=2.1]` came to fail to resolve.
+      - name: Check out LammpsIO
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/LammpsIO
+          ref: ${{ inputs.lammpsio_ref }}
+          path: lammpsio
+
       - name: Set up MSVC developer shell
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -94,9 +111,11 @@ jobs:
 
           plugin_dir="$PWD/plugin"
           coretoolkit_dir="$PWD/coretoolkit"
+          lammpsio_dir="$PWD/lammpsio"
           install_dir="$PWD/.ci-install"
           mkdir -p "$install_dir"
 
+          conan export "$lammpsio_dir"
           conan export "$coretoolkit_dir"
           coretoolkit_version="$(conan inspect "$coretoolkit_dir" --format=json | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')"
 

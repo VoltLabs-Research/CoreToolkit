@@ -11,6 +11,9 @@ class CoreToolkitConan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
     requires = (
         "boost/1.88.0",
+        # The trajectory reader core, shared with the daemon's Node addon so a format is
+        # implemented once. Header-and-static-lib only, no transitive requirements.
+        "lammpsio/[>=2.1]",
         "onetbb/2021.12.0",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
@@ -90,6 +93,7 @@ class CoreToolkitConan(ConanFile):
             self.cpp_info.defines.append("VOLT_HAVE_PARALLEL_DELAUNAY")
         self.cpp_info.requires = [
             "boost::headers",
+            "lammpsio::lammpsio",
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",

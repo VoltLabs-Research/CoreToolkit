@@ -164,15 +164,6 @@ public:
         bool overwriteExistingColumns = true
     );
 
-private:
-    bool parseStream(std::istream &in, Frame &frame);
-    bool readHeader(std::istream &in, Frame &f);
-    bool readBoxBounds(std::istream &in, Frame &f, std::string &atomsHeaderLine);
-    bool readAtomData(std::istream &in, Frame &f, const std::string &atomsHeaderLine);
-
-    std::vector<std::string> parseColumns(const std::string &line);
-
-    int findColumn(const std::vector<std::string> &cols, const std::string &name);
 };
 
 }

@@ -90,43 +90,43 @@ dependency_chain() {
 
     case "$plugin" in
         AtomicStrain)
-            printf '%s\n' CoreToolkit AtomicStrain
+            printf '%s\n' LammpsIO CoreToolkit AtomicStrain
             ;;
         CentroSymmetryParameter)
-            printf '%s\n' CoreToolkit CentroSymmetryParameter
+            printf '%s\n' LammpsIO CoreToolkit CentroSymmetryParameter
             ;;
         ClusterAnalysis)
-            printf '%s\n' CoreToolkit ClusterAnalysis
+            printf '%s\n' LammpsIO CoreToolkit ClusterAnalysis
             ;;
         CommonNeighborAnalysis)
-            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification CommonNeighborAnalysis
             ;;
         CoordinationAnalysis)
-            printf '%s\n' CoreToolkit CoordinationAnalysis
+            printf '%s\n' LammpsIO CoreToolkit CoordinationAnalysis
             ;;
         DisplacementsAnalysis)
-            printf '%s\n' CoreToolkit DisplacementsAnalysis
+            printf '%s\n' LammpsIO CoreToolkit DisplacementsAnalysis
             ;;
         ElasticStrain)
-            printf '%s\n' CoreToolkit StructureIdentification ElasticStrain
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification ElasticStrain
             ;;
         GrainSegmentation)
-            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching GrainSegmentation
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching GrainSegmentation
             ;;
         LineReconstructionDXA)
-            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching OpenDXA LineReconstructionDXA
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching OpenDXA LineReconstructionDXA
             ;;
         OpenDXA)
-            printf '%s\n' CoreToolkit StructureIdentification OpenDXA
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification OpenDXA
             ;;
         PatternStructureMatching)
-            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PatternStructureMatching
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification CommonNeighborAnalysis PatternStructureMatching
             ;;
         PolyhedralTemplateMatching)
-            printf '%s\n' CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification CommonNeighborAnalysis PolyhedralTemplateMatching
             ;;
         StructureIdentification)
-            printf '%s\n' CoreToolkit StructureIdentification
+            printf '%s\n' LammpsIO CoreToolkit StructureIdentification
             ;;
         *)
             die "unsupported plugin '$plugin'"
@@ -138,7 +138,7 @@ repo_subdir() {
     local repo="$1"
 
     case "$repo" in
-        CoreToolkit)
+        CoreToolkit | LammpsIO)
             printf 'tools\n'
             ;;
         *)

@@ -71,6 +71,7 @@ find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(Boost REQUIRED)
 find_package(duckdb REQUIRED)
+find_package(lammpsio REQUIRED)
 
 set(VOLT_BOOST_TARGET "")
 if(TARGET Boost::headers)
@@ -157,6 +158,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 	nlohmann_json::nlohmann_json
 	${VOLT_BOOST_TARGET}
 	duckdb::duckdb
+	lammpsio::lammpsio
 	mwm_csp
 	geogram
 )

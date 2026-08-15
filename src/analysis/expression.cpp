@@ -6,9 +6,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-// C++23 mirror of @voltstack/expressions. Kept structurally parallel to
-// the TypeScript parser/evaluator so the two stay in lockstep.
-
 namespace Volt::Analysis{
 
 namespace{
@@ -64,8 +61,6 @@ std::vector<Token> tokenize(const std::string& input){
         if(ch == ')'){ tokens.push_back({ TokenType::RParen, ")", startLine, startColumn }); advance(); continue; }
         if(ch == ','){ tokens.push_back({ TokenType::Comma, ",", startLine, startColumn }); advance(); continue; }
 
-        // Numbers: integer, decimal, scientific notation. Checked before the
-        // lone-dot branch so a leading-dot literal like '.5' lexes as a number.
         if(isDigit(ch) || (ch == '.' && isDigit(peekAt(1)))){
             std::string raw;
             while(index < input.size() && isDigit(input[index])){ raw += input[index]; advance(); }
@@ -87,10 +82,8 @@ std::vector<Token> tokenize(const std::string& input){
             continue;
         }
 
-        // Member-access dot (after the number branch, so '.5' is a number).
         if(ch == '.'){ tokens.push_back({ TokenType::Dot, ".", startLine, startColumn }); advance(); continue; }
 
-        // Quoted strings: variable type names ("Cu") and string literals.
         if(ch == '"' || ch == '\''){
             char quote = ch;
             advance();
@@ -120,7 +113,6 @@ std::vector<Token> tokenize(const std::string& input){
             continue;
         }
 
-        // Operators.
         {
             static const std::unordered_set<char> operatorChars{
                 '+', '-', '*', '/', '^', '=', '!', '<', '>', '&', '|'
@@ -219,7 +211,6 @@ private:
 
             std::string op = token.value;
             next();
-            // '^' is right-associative; everything else left-associative.
             int nextMin = (op == "^") ? precedence : precedence + 1;
             Expr right = parseExpression(nextMin);
 
@@ -278,7 +269,6 @@ private:
             std::string name = token.value;
             next();
 
-            // Function call.
             if(peek().type == TokenType::LParen){
                 next();
                 Expr node;
@@ -295,7 +285,6 @@ private:
                 return node;
             }
 
-            // Member access: Position.X
             if(peek().type == TokenType::Dot){
                 next();
                 const Token& property = expect(TokenType::Identifier, "property name after .");
@@ -306,7 +295,6 @@ private:
                 return node;
             }
 
-            // Boolean literals.
             if(name == "true" || name == "false"){
                 Expr node;
                 node.kind = ExprKind::Number;
@@ -324,8 +312,6 @@ private:
         throw ExpressionError("expected a value but found '" + found + "'", token.line, token.column);
     }
 };
-
-// ---- Evaluation ----
 
 const std::array<const char*, 3> COMPONENT_NAMES{ "X", "Y", "Z" };
 
@@ -451,7 +437,6 @@ Value evalBinary(const Expr& expr, const AtomContext& context, std::size_t atomI
     const Expr& leftExpr = expr.children[0];
     const Expr& rightExpr = expr.children[1];
 
-    // Short-circuit logical operators.
     if(op == BinaryOp::And){
         double left = asNumber(evalNode(leftExpr, context, atomIndex), "&&");
         if(left == 0.0) return 0.0;
@@ -466,7 +451,6 @@ Value evalBinary(const Expr& expr, const AtomContext& context, std::size_t atomI
     Value left = evalNode(leftExpr, context, atomIndex);
     Value right = evalNode(rightExpr, context, atomIndex);
 
-    // Equality works on strings (type-name matching) and numbers.
     if(op == BinaryOp::Eq) return (left == right) ? 1.0 : 0.0;
     if(op == BinaryOp::Ne) return (left != right) ? 1.0 : 0.0;
 

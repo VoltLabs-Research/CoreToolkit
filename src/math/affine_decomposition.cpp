@@ -334,7 +334,6 @@ Quaternion snuggle(Quaternion q, Vector3& k){
 			if ((neg[i] = (qa[i]<0.0))) qa[i] = -qa[i];
 			par ^= neg[i];
 		}
-		/* Find two largest components, indices in hi and lo */
 		if (qa[0]>qa[1]) lo = 0; else lo = 1;
 		if (qa[2]>qa[3]) hi = 2; else hi = 3;
 		if (qa[lo]>qa[hi]) {
@@ -346,14 +345,14 @@ Quaternion snuggle(Quaternion q, Vector3& k){
 		two = (qa[hi]+qa[lo])*SQRTHALF;
 		big = qa[hi];
 		if(all>two) {
-			if (all>big) {/*all*/
+			if (all>big) {
 				{ size_t i; for (i=0; i<4; i++) pa[i] = sgn(neg[i], 0.5); }
 				cycle(ka,par)
 			}
 			else {/*big*/ pa[hi] = sgn(neg[hi],1.0);}
 		}
 		else {
-			if (two>big) {/*two*/
+			if (two>big) {
 				pa[hi] = sgn(neg[hi],SQRTHALF); pa[lo] = sgn(neg[lo], SQRTHALF);
 				if (lo>hi) {hi ^= lo; lo ^= hi; hi ^= lo;}
 				if (hi==W) {hi = "\001\002\000"[lo]; lo = 3-hi-lo;}

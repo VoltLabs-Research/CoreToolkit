@@ -9,17 +9,9 @@ class CoreToolkitConan(ConanFile):
     package_type = "static-library"
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
-    # Single source of truth for the release ISA baseline. It has to be an option
-    # rather than only a CMake cache variable, because package_info() below has to
-    # export the very same flag to consumers and cannot read CMake state.
-    #   x86-64-v3 = AVX2 + FMA + BMI2, i.e. Haswell (2013) and newer.
-    #   native    = tune to the build host; not portable, do not ship it.
-    #   off       = plain x86-64 (SSE2), the pre-2026-08 behaviour.
     options = {"baseline_arch": ["off", "x86-64", "x86-64-v2", "x86-64-v3", "x86-64-v4", "native"]}
     requires = (
         "boost/1.88.0",
-        # The trajectory reader core, shared with the daemon's Node addon so a format is
-        # implemented once. Header-and-static-lib only, no transitive requirements.
         "lammpsio/[>=2.1]",
         "onetbb/2021.12.0",
         "spdlog/1.14.1",
@@ -30,24 +22,6 @@ class CoreToolkitConan(ConanFile):
         "baseline_arch": "x86-64-v3",
         "hwloc/*:shared": True,
         "onetbb/*:shared": False,
-        # NOTE: boost/*:without_stacktrace is intentionally NOT set here. It is a
-        # Linux-only fix and is applied per-OS by the build entrypoints instead
-        # (CI conan_args gated on runner.os, Dockerfile.build, scripts/install*.sh
-        # — all Linux). Reason: on Linux, boost 1.88 builds
-        # libboost_stacktrace_from_exception.a, which interposes
-        # __cxa_allocate_exception; linking a plugin with -static-libstdc++ then
-        # fails with "multiple definition of __cxa_allocate_exception" against
-        # libstdc++.a, so we drop the stacktrace libs (we only use Boost headers).
-        # But ConanCenter ships NO prebuilt boost binary with without_stacktrace=True
-        # for ANY OS — setting it globally forced boost to compile from source on
-        # macOS and Windows too. Keeping the default everywhere except Linux lets
-        # macOS/Windows download the prebuilt boost binary.
-        # DuckDB is our Parquet engine. Unlike Arrow (no ConanCenter binary for a
-        # parquet build -> ~35 min source compile on every OS, and a hard MSVC
-        # build failure on Windows), DuckDB ships prebuilt binaries for every CI
-        # target, so it downloads instead of compiling. We only need a static lib
-        # with the built-in Parquet writer; every optional extension is off to
-        # keep the package minimal (these mirror the recipe defaults).
         "duckdb/*:shared": False,
         "duckdb/*:with_parquet": True,
         "duckdb/*:with_httpfs": False,
@@ -93,8 +67,6 @@ class CoreToolkitConan(ConanFile):
             flags = ["-march=native"]
         else:
             flags = ["-march=" + arch]
-        # Neither of these changes results; they only let the optimiser drop
-        # errno/trap bookkeeping around libm calls.
         return flags + ["-fno-math-errno", "-fno-trapping-math"]
 
     def generate(self):
@@ -121,19 +93,11 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.libs = ["coretoolkit", "mwm_csp", "geogram"]
         self.cpp_info.defines = ["GEO_STATIC_LIBS"]
 
-        # See _release_arch_flags(). Release only: a Debug consumer wants neither
-        # the ISA baseline nor the libm relaxations.
         if self.settings.build_type == "Release":
             arch_flags = self._release_arch_flags()
             self.cpp_info.cflags.extend(arch_flags)
             self.cpp_info.cxxflags.extend(arch_flags)
 
-        # geogram is built with OpenMP so that its parallel Delaunay backend (PDEL)
-        # has a working thread manager — OMPThreadManager is the only real one in the
-        # amalgamation and it sits behind #ifdef GEO_OPENMP. Since libgeogram.a then
-        # contains unresolved GOMP_*/omp_* references, every consumer has to link the
-        # OpenMP runtime too; a static library cannot carry that for them.
-        # VOLT_HAVE_PARALLEL_DELAUNAY is what opendxa keys the PDEL path off.
         if self.settings.os in ("Linux", "FreeBSD"):
             self.cpp_info.system_libs.append("gomp")
             self.cpp_info.cflags.append("-fopenmp")
@@ -144,13 +108,6 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.requires = [
             "boost::headers",
             "lammpsio::lammpsio",
-            # Has to be the aggregate: the onetbb recipe publishes a single "root"
-            # cpp_info component, so there is no onetbb::tbb to require and no way to
-            # drop tbbmalloc_proxy here. The aggregate puts the proxy on every link
-            # line, and the proxy interposes the process-wide operator new / malloc,
-            # so the pairing is pinned at link time instead — see the tbbmalloc block
-            # in cmake/VoltPlugin.cmake for the mismatch that caused and how it is
-            # closed.
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",

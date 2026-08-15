@@ -96,7 +96,6 @@ void PropertyBase::resize(size_t newSize, bool preserveData){
 		return;
 	}
 
-	//assert(_stride > 0);
 	const auto newBufSize = newSize * _stride;
 	auto newData = std::make_unique<uint8_t[]>(newBufSize);
 

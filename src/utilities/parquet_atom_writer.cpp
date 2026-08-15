@@ -16,10 +16,6 @@ namespace {
 
 enum class ColType { Double, Int64, String, ListDouble };
 
-// A dynamic column buffers one DuckDB Value per completed row. Columns are created
-// on first use and back-filled with typed NULLs so every row stays aligned; the
-// full schema is only known after the atom loop, so the table is materialised and
-// written at the end (mirrors the previous Arrow buffer-then-write design).
 struct DynColumn {
     std::string name;
     ColType type;
@@ -47,8 +43,6 @@ const char* sqlTypeFor(ColType type){
     return "DOUBLE";
 }
 
-// Quotes a SQL identifier (column name) with double quotes, doubling any embedded
-// double quote. Plugin-supplied property names are untrusted as identifiers.
 std::string quoteIdent(const std::string& name){
     std::string out;
     out.reserve(name.size() + 2);
@@ -61,14 +55,13 @@ std::string quoteIdent(const std::string& name){
     return out;
 }
 
-} // namespace
+}
 
 struct ColumnarAtomWriter::Impl {
     std::vector<DynColumn> columns;
     std::unordered_map<std::string, std::size_t> index;
     std::int64_t rowsCompleted = 0;
 
-    // Fixed columns owned by streamAtomsToParquet; a plugin must not shadow them.
     static bool isReserved(const std::string& name){
         return name == "atom_index" || name == "id" || name == "x" || name == "y"
             || name == "z" || name == "bucket" || name == "structure_id"
@@ -82,7 +75,6 @@ struct ColumnarAtomWriter::Impl {
         DynColumn col;
         col.name = name;
         col.type = type;
-        // Back-fill typed NULLs for rows that completed before this column appeared.
         const duckdb::LogicalType lt = logicalTypeFor(type);
         col.values.reserve(static_cast<std::size_t>(rowsCompleted) + 1);
         for(std::int64_t r = 0; r < rowsCompleted; ++r) col.values.emplace_back(lt);
@@ -95,8 +87,6 @@ struct ColumnarAtomWriter::Impl {
     void appendDouble(const std::string& name, double v){
         if(isReserved(name)) return;
         auto& c = ensure(name, ColType::Double);
-        // Match the established column type (types are consistent per name in
-        // practice; coerce defensively rather than mismatch the schema).
         if(c.type == ColType::Int64) c.values.emplace_back(duckdb::Value::BIGINT(static_cast<std::int64_t>(v)));
         else                          c.values.emplace_back(duckdb::Value::DOUBLE(v));
         c.touchedThisRow = true;
@@ -126,7 +116,7 @@ struct ColumnarAtomWriter::Impl {
 
     void finishRow(){
         for(auto& c : columns){
-            if(!c.touchedThisRow) c.values.emplace_back(logicalTypeFor(c.type)); // typed NULL
+            if(!c.touchedThisRow) c.values.emplace_back(logicalTypeFor(c.type));
             c.touchedThisRow = false;
         }
         ++rowsCompleted;
@@ -148,7 +138,6 @@ void streamAtomsToParquet(
 ){
     const std::size_t natoms = static_cast<std::size_t>(frame.natoms);
 
-    // Stable structure_id per bucket, assigned in first-seen order.
     std::map<std::string, std::int32_t> bucketId;
     auto idForBucket = [&](const std::string& name) -> std::int32_t {
         auto it = bucketId.find(name);
@@ -158,7 +147,6 @@ void streamAtomsToParquet(
         return id;
     };
 
-    // Fixed columns buffered as native vectors (structure_name mirrors bucket).
     std::vector<std::uint32_t> atomIndex; atomIndex.reserve(natoms);
     std::vector<std::uint64_t> ids;        ids.reserve(natoms);
     std::vector<double> xs, ys, zs;        xs.reserve(natoms); ys.reserve(natoms); zs.reserve(natoms);
@@ -193,7 +181,6 @@ void streamAtomsToParquet(
         auto db = Volt::Detail::openInMemoryDb();
         duckdb::Connection con(*db);
 
-        // Build the table schema: fixed columns + dynamic columns in creation order.
         std::string ddl =
             "CREATE TABLE atoms("
             "atom_index UINTEGER, id UBIGINT, x DOUBLE, y DOUBLE, z DOUBLE, "
@@ -221,7 +208,7 @@ void streamAtomsToParquet(
                 appender.Append(duckdb::Value(buckets[i]));
                 if(includeStructureColumns){
                     appender.Append<std::int32_t>(structureIds[i]);
-                    appender.Append(duckdb::Value(buckets[i])); // structure_name == bucket
+                    appender.Append(duckdb::Value(buckets[i]));
                 }
                 for(auto& col : dyn.columns){
                     appender.Append(col.values[i]);
@@ -233,7 +220,6 @@ void streamAtomsToParquet(
 
         (void)Detail::copyTableToParquet(con, "atoms", filePath);
     } catch (...) {
-        // Writers return void / best-effort; swallow to preserve prior behaviour.
     }
 }
 

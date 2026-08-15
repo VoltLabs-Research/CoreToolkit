@@ -14,10 +14,6 @@ namespace {
 
 enum class ColType { Double, Int64, String, ListDouble };
 
-// A dynamic column buffers one DuckDB Value per completed row. Columns are
-// created on first use and back-filled with typed NULLs so every row stays
-// aligned; the full schema is only known after the line loop, so the table is
-// materialised and written at the end (same design as the per-atom writer).
 struct DynColumn {
     std::string name;
     ColType type;
@@ -45,9 +41,6 @@ const char* sqlTypeFor(ColType type){
     return "DOUBLE";
 }
 
-// Quotes a SQL identifier (column name) with double quotes, doubling any
-// embedded double quote. Plugin-supplied property names are untrusted as
-// identifiers.
 std::string quoteIdent(const std::string& name){
     std::string out;
     out.reserve(name.size() + 2);
@@ -60,14 +53,13 @@ std::string quoteIdent(const std::string& name){
     return out;
 }
 
-} // namespace
+}
 
 struct ColumnarLineWriter::Impl {
     std::vector<DynColumn> columns;
     std::unordered_map<std::string, std::size_t> index;
     std::int64_t rowsCompleted = 0;
 
-    // Fixed columns owned by streamLinesToParquet; a plugin must not shadow them.
     static bool isReserved(const std::string& name){
         return name == "id" || name == "points";
     }
@@ -79,7 +71,6 @@ struct ColumnarLineWriter::Impl {
         DynColumn col;
         col.name = name;
         col.type = type;
-        // Back-fill typed NULLs for rows that completed before this column appeared.
         const duckdb::LogicalType lt = logicalTypeFor(type);
         col.values.reserve(static_cast<std::size_t>(rowsCompleted) + 1);
         for(std::int64_t r = 0; r < rowsCompleted; ++r) col.values.emplace_back(lt);
@@ -92,8 +83,6 @@ struct ColumnarLineWriter::Impl {
     void appendDouble(const std::string& name, double v){
         if(isReserved(name)) return;
         auto& c = ensure(name, ColType::Double);
-        // Match the established column type (types are consistent per name in
-        // practice; coerce defensively rather than mismatch the schema).
         if(c.type == ColType::Int64) c.values.emplace_back(duckdb::Value::BIGINT(static_cast<std::int64_t>(v)));
         else                          c.values.emplace_back(duckdb::Value::DOUBLE(v));
         c.touchedThisRow = true;
@@ -123,7 +112,7 @@ struct ColumnarLineWriter::Impl {
 
     void finishRow(){
         for(auto& c : columns){
-            if(!c.touchedThisRow) c.values.emplace_back(logicalTypeFor(c.type)); // typed NULL
+            if(!c.touchedThisRow) c.values.emplace_back(logicalTypeFor(c.type));
             c.touchedThisRow = false;
         }
         ++rowsCompleted;
@@ -143,7 +132,6 @@ void streamLinesToParquet(
 ){
     const duckdb::LogicalType pointType = duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
 
-    // points buffered as one nested-list Value per line.
     std::vector<duckdb::Value> pointLists;
     pointLists.reserve(lineCount);
 
@@ -174,7 +162,6 @@ void streamLinesToParquet(
         auto db = Volt::Detail::openInMemoryDb();
         duckdb::Connection con(*db);
 
-        // Build the table schema: fixed columns + dynamic columns in creation order.
         std::string ddl = "CREATE TABLE lines(id UBIGINT, points DOUBLE[][]";
         for(const auto& col : dyn.columns){
             ddl += ", ";
@@ -201,7 +188,6 @@ void streamLinesToParquet(
 
         (void)Detail::copyTableToParquet(con, "lines", filePath);
     } catch (...) {
-        // Writers return void / best-effort; swallow to match the atom writer.
     }
 }
 

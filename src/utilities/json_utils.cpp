@@ -23,7 +23,7 @@ std::string normalizeParquetPath(const std::string& filePath){
     return filePath + ext;
 }
 
-} // namespace
+}
 
 bool JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
     const std::string outputPath = normalizeParquetPath(filePath);

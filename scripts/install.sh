@@ -8,10 +8,6 @@ else
 fi
 GITHUB_ORG="${GITHUB_ORG:-https://github.com/voltlabs-research}"
 WORK_DIR="${WORK_DIR:-./voltlabs-ecosystem}"
-# boost/*:without_stacktrace=True: we never use boost::stacktrace, and on Linux
-# boost 1.88's libboost_stacktrace_from_exception.a interposes
-# __cxa_allocate_exception, which collides with libstdc++.a under
-# -static-libstdc++. We only use Boost headers, so dropping it is safe.
 CONAN_OPTS=(--build=missing -o "hwloc/*:shared=True" -o "boost/*:without_stacktrace=True")
 SUPPORTED_CMAKE_VERSION="3.20.0"
 SUPPORTED_CONAN_VERSION="2.0.0"
@@ -255,7 +251,6 @@ build_packages() {
     local dockerfile_path="${WORK_DIR}/tools/CoreToolkit/Dockerfile.build"
     local algorithm_path
 
-    # Check for --no-cache anywhere in args
     for arg in "$@"; do
         if [[ "$arg" == "--no-cache" ]]; then
             build_extra_args+=(--no-cache)

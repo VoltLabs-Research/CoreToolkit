@@ -6,11 +6,6 @@
 
 namespace Volt{
 
-/**
- * Helper for building consistent JSON results from analysis services.
- * Every service returns json with at least "is_failed" and optionally
- * "error", timing information, and analysis-specific fields.
- */
 class AnalysisResult{
 public:
 	using json = nlohmann::json;

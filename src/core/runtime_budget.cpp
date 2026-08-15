@@ -28,9 +28,6 @@ namespace{
 
 int g_workers = 0;
 
-// Held for the lifetime of the process. oneTBB honours the most restrictive live
-// global_control, so this must outlive every parallel_for rather than being a
-// temporary the caller drops.
 std::optional<tbb::global_control> g_tbbControl;
 
 std::optional<tbb::task_arena> g_numaArena;
@@ -40,7 +37,6 @@ int hardwareThreads(){
     return n > 0 ? static_cast<int>(n) : 1;
 }
 
-// Reads a positive integer environment variable, or 0 when absent/malformed.
 long long positiveEnv(const char* name){
     const char* raw = std::getenv(name);
     if(!raw || !*raw){
@@ -76,10 +72,6 @@ void applyThreadBudget(int requestedWorkers){
     );
 
 #ifdef _OPENMP
-    // geogram's parallel Delaunay backend runs on OpenMP, not TBB, so the
-    // global_control above does not reach it. Without this line libgomp sizes its
-    // pool from nproc and a --threads 1 run still spawned a full pool: measured
-    // 221% CPU for a nominally single-threaded DXA run.
     omp_set_num_threads(g_workers);
     omp_set_dynamic(0);
 #endif
@@ -97,9 +89,6 @@ int bindToNumaNode(){
         return -1;
     }
 
-    // Spread siblings deterministically instead of stacking them on node 0. The
-    // pid is the only identifier a plugin process has that differs between
-    // concurrent siblings; the daemon does not tell it which slot it occupies.
     std::size_t which = 0;
 #if defined(__linux__)
     which = static_cast<std::size_t>(::getpid()) % nodes.size();
@@ -135,9 +124,6 @@ std::size_t duckdbMemoryLimitBytes(){
         return static_cast<std::size_t>(override_mb) * kMebi;
     }
 
-    // The writers only buffer one table and COPY it out, so this does not need to
-    // scale with the frame. A quarter of RAM, capped at 4 GiB, leaves room for the
-    // analysis itself (measured at ~3 KB/atom) and for sibling processes.
     const std::size_t total = totalSystemMemoryBytes();
     const std::size_t quarter = total > 0 ? total / 4 : 2048ull * kMebi;
     return std::min<std::size_t>(quarter, 4096ull * kMebi);

@@ -10,69 +10,50 @@ namespace Volt{
 
 class CutoffNeighborFinder{
 private:
-    // An internal per-particle data structure
     struct NeighborListParticle{
-        // The position of the particle, wrapped at periodic boundaries
         Point3 pos;
-        // The offset applied to the particle when wrapping it at periodic boundaries
         Vector_3<int8_t> pbcShift;
     };
 
 public:
-    // Default constructor
     CutoffNeighborFinder(): _cutoffRadius(0), _cutoffRadiusSquared(0){}
 
-    // Prepares the neighbor finder by sorting particles into a grid of a bin cells.
     bool prepare(double cutoffRadius, ParticleProperty* positions, const SimulationCell& simCell);
 
-    // Returns the cutoff radius set via prepare()
     double cutoffRadius() const{
         return _cutoffRadius;
     }
 
-    // Return the square of the cutoff radius set via prepare()
     double cutoffRadiusSquared() const{
         return _cutoffRadiusSquared;
     }
 
-    // An iterator class that returns all neighbors of a central particle
     class Query{
     public:
-        // Constructs a new neighbor query object that can be used to iterate over the neighbors of a particle.
         Query(const CutoffNeighborFinder& finder, size_t particleIndex);
 
-        // Indicates wheter the end of the list of neighbors has been reached
         bool atEnd() const{
             return _atEnd;
         }
 
-        // Finds the next neighbor particle within the cutoff radius.
-        // Use atEnd() to test wheter another neighbor has been found.
         void next();
 
-        // Returns the index of the current neighbor particle
         size_t current(){
             return _neighborIndex;
         }
 
-        // Returns the vector connectin the central particle with the current neighbor
         const Vector3& delta() const{
             return _delta;
         }
 
-        // Returns the distance squared between the central particle and the current neighbor
         double distanceSquared() const{
             return _distSq;
         }
 
-        // Returns the PBC shift vector between the central particle and the current neighbor.
-        // The vector is non-zero if the current neighbor vector crosses a periodic boundary.
 		const Vector_3<int8_t>& pbcShift() const{
             return _pbcShift;
         }
 
-        // Returns the PBC shift vector between the central particle and the current neighbor
-        // as if the two particles were not wrapped at the periodic boundaries of the simulation cell.
         Vector_3<int8_t> unwrappedPbcShift() const {
 			const auto& s1 = _builder.particles[_centerIndex].pbcShift;
 			const auto& s2 = _builder.particles[_neighborIndex].pbcShift;
@@ -99,28 +80,20 @@ public:
     };
 
 private:
-    // The neighbor criterion
     double _cutoffRadius;
     double _cutoffRadiusSquared;
     
     SimulationCell simCell;
 
-    // Number of bins in each spatial direction
     int binDim[3];
 
-    // Used to determine the bin from a particle position
     AffineTransformation reciprocalBinCell;
 
-    // The internal list of particles
     std::vector<NeighborListParticle> particles;
 
-    // Contiguous bins (counting-sort layout): binnedIndices holds particle
-    // indices grouped by bin; [binStart[b], binStart[b+1]) is bin b's range.
     std::vector<uint32_t> binStart;
     std::vector<uint32_t> binnedIndices;
 
-    // The list of adjacent cells to visit while finding
-    // the neighbors of a central particle
 	std::vector<Vector3I> stencil;
 };
 

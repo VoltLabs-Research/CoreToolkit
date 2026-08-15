@@ -1,24 +1,3 @@
-// volt-dump-transform — a single-operation LAMMPS dump mutator for daemon-side
-// pipelines. It reads a LAMMPS dump fully into memory, applies exactly ONE
-// operation, and writes a LAMMPS dump back out (input and output may be the
-// same path, since the frame is buffered before the output stream is opened).
-//
-// Operations (mutually exclusive, exactly one per invocation):
-//   --slice  <nx>,<ny>,<nz>,<distance>,<reverse>
-//       Keep atoms on one side of the clip plane defined by the (possibly
-//       unnormalized) normal (nx,ny,nz) and the signed plane offset `distance`.
-//       Mirrors the client SlicePlane half-space: with the normal normalized,
-//       keep when  dot(n_unit, p) - distance <= 0  (reverse=0), or  >= 0
-//       (reverse=1).
-//   --select "<expression>"
-//       Keep atoms where the CoreToolkit expression engine evaluates truthy.
-//   --merge  <props.parquet>
-//       Join the parquet's per-atom columns onto the dump BY ATOM ID and write
-//       the dump with the extra columns appended.
-//
-// Usage:
-//   volt-dump-transform <input.dump> <output.dump> (--slice ... | --select ... | --merge ...)
-
 #include <volt/core/lammps_parser.h>
 #include <volt/core/particle_property.h>
 #include <volt/analysis/expression.hpp>
@@ -50,15 +29,6 @@ using Volt::Vector3;
     std::exit(2);
 }
 
-// ---------------------------------------------------------------------------
-// Frame compaction shared by --slice and --select.
-//
-// Builds a new Frame holding only the atoms whose keep-mask is non-zero,
-// compacting positions/types/ids, the image flags, AND every atomProperties
-// column in lockstep, while carrying over atomColumnOrder, atomColumnsScaled,
-// the simulation cell, the timestep and the header sections so the result
-// round-trips through the faithful (merged) writer.
-// ---------------------------------------------------------------------------
 LammpsParser::Frame compactFrame(const LammpsParser::Frame& in, const std::vector<char>& keep){
     LammpsParser::Frame out;
     out.timestep = in.timestep;
@@ -85,7 +55,6 @@ LammpsParser::Frame compactFrame(const LammpsParser::Frame& in, const std::vecto
         out.imageZ.reserve(kept);
     }
 
-    // Mirror the source atomProperties schema (same dtype, empty buffers).
     for(const auto& [name, column] : in.atomProperties){
         auto& dst = out.atomProperties[name];
         dst.dataType = column.dataType;
@@ -124,19 +93,11 @@ LammpsParser::Frame compactFrame(const LammpsParser::Frame& in, const std::vecto
     return out;
 }
 
-// Faithful re-emit: the merged writer honours atomColumnOrder + atomColumnsScaled
-// and re-serialises every atomProperties column. With no extra columns and no
-// id mapping this becomes a pure round-trip of the (compacted) frame.
-// NOTE: ix/iy/iz image flags are parsed into frame.imageX/Y/Z but neither dump
-// writer emits them, so they are not present in the output (library limitation).
 bool writeFrame(const std::string& output, const LammpsParser::Frame& frame){
     LammpsParser parser;
     return parser.writeFileMergedWithExtraColumns(output, frame, {}, {});
 }
 
-// ---------------------------------------------------------------------------
-// --slice
-// ---------------------------------------------------------------------------
 bool parseSliceArgs(const std::string& arg, Vector3& normal, double& distance, bool& reverse){
     std::array<double, 5> values{};
     std::size_t valueIndex = 0;
@@ -190,20 +151,11 @@ bool runSlice(const LammpsParser::Frame& frame, const std::string& arg, const st
     return writeFrame(output, compacted);
 }
 
-// ---------------------------------------------------------------------------
-// --select
-//
-// Builds an AtomContext over the frame's columns so the expression engine can
-// resolve the OVITO-style variable namespace plus per-column access. Numeric
-// columns are exposed through ParticleProperty views (no copy where possible).
-// Position is a 3-component column (Position.X/Y/Z); x/y/z are scalar aliases.
-// ---------------------------------------------------------------------------
 class SelectionContext{
 public:
     explicit SelectionContext(const LammpsParser::Frame& frame){
         const auto atomCount = static_cast<std::size_t>(frame.natoms);
 
-        // 3-component Position (bound directly over the interleaved buffer).
         if(!frame.positions.empty()){
             auto position = std::make_shared<ParticleProperty>();
             position->bindExternalData(
@@ -211,8 +163,6 @@ public:
                 atomCount, DataType::Double, 3, sizeof(Point3));
             add("Position", position);
 
-            // Scalar x/y/z aliases (materialised, since the interleaved buffer
-            // cannot be viewed as a tightly-packed scalar column).
             _x.reserve(atomCount);
             _y.reserve(atomCount);
             _z.reserve(atomCount);
@@ -237,7 +187,6 @@ public:
             add("ParticleType", types);
         }
 
-        // Every extra per-atom column, by its dump name.
         for(const auto& [name, column] : frame.atomProperties){
             std::shared_ptr<ParticleProperty> prop;
             switch(column.dataType){
@@ -301,15 +250,6 @@ bool runSelect(const LammpsParser::Frame& frame, const std::string& expression, 
     return writeFrame(output, compacted);
 }
 
-// ---------------------------------------------------------------------------
-// --merge
-//
-// Reads the parquet with the DuckDB C++ API (linked transitively via the
-// coretoolkit target). Selects the `id` column plus every other numeric column,
-// materialises them into stable per-column buffers, and hands them to the merge
-// writer keyed by atom id. Dump atoms with no matching parquet row are still
-// written; the writer fills their extra columns with the default (0).
-// ---------------------------------------------------------------------------
 struct ParquetColumn{
     std::string name;
     DataType dataType = DataType::Void;
@@ -348,7 +288,7 @@ DataType mapLogicalType(duckdb::LogicalTypeId id){
         case duckdb::LogicalTypeId::BOOLEAN:
             return DataType::Int;
         default:
-            return DataType::Void; // unsupported (e.g. VARCHAR) — skipped
+            return DataType::Void;
     }
 }
 
@@ -381,7 +321,6 @@ bool runMerge(const LammpsParser::Frame& frame, const std::string& parquetPath, 
     std::vector<int> propertyAtomIds;
     propertyAtomIds.reserve(rowCount);
 
-    // Stable storage: reserve so element addresses never move before the write.
     std::vector<ParquetColumn> columns;
     columns.reserve(columnCount);
     std::vector<duckdb::idx_t> columnSourceIndex;
@@ -438,7 +377,7 @@ bool runMerge(const LammpsParser::Frame& frame, const std::string& parquetPath, 
         extra.dataType = column.dataType;
         extra.rowCount = static_cast<std::size_t>(rowCount);
         extra.componentCount = 1;
-        extra.stride = 0; // auto: componentCount * sizeof(element)
+        extra.stride = 0;
         extraColumns.push_back(std::move(extra));
     }
 
@@ -447,7 +386,7 @@ bool runMerge(const LammpsParser::Frame& frame, const std::string& parquetPath, 
         output, frame, propertyAtomIds, extraColumns, /*extraHeaders*/ {}, /*overwriteExistingColumns*/ true);
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv){
     if(argc < 4){

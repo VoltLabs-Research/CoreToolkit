@@ -28,8 +28,8 @@ std::string normalizeParquetPath(const std::string& filePath){
 bool JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
     const std::string outputPath = normalizeParquetPath(filePath);
     try {
-        duckdb::DuckDB db(nullptr);
-        duckdb::Connection con(db);
+        auto db = Volt::Detail::openInMemoryDb();
+        duckdb::Connection con(*db);
 
         if(con.Query("CREATE TABLE t(payload VARCHAR)")->HasError()) return false;
 

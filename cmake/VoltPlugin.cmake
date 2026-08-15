@@ -16,6 +16,73 @@
 #   )
 #
 
+# Pins the tbbmalloc that libtbbmalloc_proxy will actually forward to.
+#
+# The onetbb Conan recipe exposes one aggregate cpp_info component, so every VOLT
+# target links libtbbmalloc_proxy whether it wants it or not, and the proxy
+# interposes the process-wide operator new / malloc. Three things then conspire:
+#
+#   1. the executable itself never calls scalable_malloc, so the default
+#      --as-needed drops libtbbmalloc.so.2 from its DT_NEEDED;
+#   2. the proxy has NEEDED libtbbmalloc.so.2 and carries no RUNPATH of its own;
+#   3. DT_RUNPATH — unlike the obsolete DT_RPATH — is not inherited when the loader
+#      resolves a dependency's own dependencies.
+#
+# So the Conan proxy resolved libtbbmalloc.so.2 against /usr/lib and forwarded
+# every allocation in the process to a tbbmalloc from a different oneTBB release.
+# Verified with `readelf -d` (no libtbbmalloc in the exe's NEEDED, no RUNPATH in the
+# proxy) and `ldd` (proxy from ~/.conan2, libtbbmalloc from /usr/lib). A stack
+# captured inside scalable_malloc was the stall point of a nondeterministic
+# multi-minute PTM straggler that reproduced on 3 of 12 runs over byte-identical
+# input.
+#
+# The fix makes libtbbmalloc a direct, non-elidable dependency of the executable,
+# by absolute path, so the executable's own RUNPATH governs it and the pair comes
+# from one package. push-state/pop-state keeps --no-as-needed scoped to this one
+# library instead of retaining every shared object on the link line.
+function(volt_pin_tbbmalloc TARGET_NAME)
+    if(NOT UNIX OR APPLE OR NOT TARGET TBB::tbbmalloc)
+        return()
+    endif()
+    # CMakeDeps declares TBB::tbbmalloc as an INTERFACE IMPORTED target, so it has no
+    # IMPORTED_LOCATION to read — the actual .so is reached through a nested imported
+    # target. Search the link directories it advertises instead, and never fall back
+    # to the default paths: picking up /usr/lib here would reintroduce exactly the
+    # mismatch this function exists to prevent.
+    set(_hints "")
+    foreach(_prop INTERFACE_LINK_DIRECTORIES)
+        get_target_property(_dirs TBB::tbbmalloc ${_prop})
+        if(_dirs)
+            list(APPEND _hints ${_dirs})
+        endif()
+    endforeach()
+    get_target_property(_tbb_dirs TBB::tbb INTERFACE_LINK_DIRECTORIES)
+    if(_tbb_dirs)
+        list(APPEND _hints ${_tbb_dirs})
+    endif()
+    if(DEFINED onetbb_PACKAGE_FOLDER_RELEASE)
+        list(APPEND _hints "${onetbb_PACKAGE_FOLDER_RELEASE}/lib")
+    endif()
+    if(DEFINED onetbb_TBB_tbbmalloc_LIB_DIRS_RELEASE)
+        list(APPEND _hints ${onetbb_TBB_tbbmalloc_LIB_DIRS_RELEASE})
+    endif()
+    list(REMOVE_DUPLICATES _hints)
+
+    unset(_loc CACHE)
+    find_library(_loc NAMES tbbmalloc HINTS ${_hints} NO_DEFAULT_PATH)
+    if(NOT _loc)
+        message(WARNING "volt_pin_tbbmalloc: could not locate libtbbmalloc alongside "
+                        "the oneTBB package (searched: ${_hints}). libtbbmalloc_proxy "
+                        "may bind to a system libtbbmalloc from a different release.")
+        return()
+    endif()
+    target_link_options(${TARGET_NAME} PRIVATE
+        "LINKER:--push-state,--no-as-needed"
+        "${_loc}"
+        "LINKER:--pop-state"
+    )
+endfunction()
+
 function(volt_add_plugin PLUGIN_NAME)
     cmake_parse_arguments(ARG
         "NO_EXECUTABLE"
@@ -143,6 +210,7 @@ function(volt_add_plugin PLUGIN_NAME)
                 ${PLUGIN_NAME}_lib
                 TBB::tbb
             )
+            volt_pin_tbbmalloc(${PLUGIN_NAME})
             install(TARGETS ${PLUGIN_NAME} DESTINATION bin)
         endif()
     endif()

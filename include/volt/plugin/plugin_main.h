@@ -3,7 +3,7 @@
 #include <volt/cli/common.h>
 #include <volt/core/analysis_result.h>
 #include <volt/core/lammps_parser.h>
-#include <oneapi/tbb/global_control.h>
+#include <volt/core/runtime_budget.h>
 
 #include <functional>
 #include <iostream>
@@ -80,6 +80,9 @@ inline std::vector<CliOption> effectiveOptions(const PluginDescriptor& desc) {
         options.push_back({"--primary", "int", "Index of the primary frame in the window.", "0", {}, ""});
     }
     options.push_back({"--threads", "int", "Max worker threads.", "auto", {}, ""});
+    options.push_back({"--numa", "auto|off", "Bind the process to one NUMA node. "
+        "Use 'auto' when running several plugin processes at once so they spread across "
+        "nodes; 'off' (default) leaves the process free to use every node.", "off", {"auto", "off"}, ""});
     return options;
 }
 
@@ -151,14 +154,27 @@ inline std::optional<int> handleIntrospection(
 
 namespace Detail {
 
-inline oneapi::tbb::global_control makeThreadControl(const OptsMap& opts) {
+// Resolves --threads once and pushes it into every pool this process owns. See
+// volt/core/runtime_budget.h for why that has to happen in one place.
+inline void applyResourceBudget(const OptsMap& opts) {
     const int requestedThreads = std::max(1, CLI::getInt(opts, "--threads",
         std::thread::hardware_concurrency() > 0
             ? static_cast<int>(std::thread::hardware_concurrency()) : 1));
-    spdlog::info("Using {} threads (OneTBB)", requestedThreads);
-    return oneapi::tbb::global_control(
-        oneapi::tbb::global_control::max_allowed_parallelism,
-        static_cast<std::size_t>(requestedThreads));
+    Runtime::applyThreadBudget(requestedThreads);
+
+    if (CLI::getString(opts, "--numa", "off") == "auto") {
+        Runtime::bindToNumaNode();
+    }
+}
+
+// Runs `body` inside the NUMA arena when one was created, so the analysis and its
+// allocations stay on the node this process was bound to. Without a binding this
+// is a plain call — no arena, no behaviour change.
+template <class Body>
+inline auto runWithinBudget(Body&& body) -> decltype(body()) {
+    decltype(body()) result{};
+    Runtime::runInBoundArena([&]{ result = body(); });
+    return result;
 }
 
 inline std::vector<std::string> splitFrameList(const std::string& raw) {
@@ -202,9 +218,8 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
         return *exitCode;
     }
 
-    auto parallelControl = Detail::makeThreadControl(opts);
-
     CLI::initLogging(desc.name);
+    Detail::applyResourceBudget(opts);
 
     LammpsParser::Frame frame;
     if (!CLI::parseFrame(filename, frame)) return 1;
@@ -234,7 +249,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     outputBase = CLI::deriveOutputBase(filename, outputBase);
     spdlog::info("Output base: {}", outputBase);
 
-    json result = run(opts, frame, refFramePtr, outputBase);
+    json result = Detail::runWithinBudget([&]{ return run(opts, frame, refFramePtr, outputBase); });
 
     return Detail::reportFailure(result, desc) ? 1 : 0;
 }
@@ -252,9 +267,8 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
         return *exitCode;
     }
 
-    auto parallelControl = Detail::makeThreadControl(opts);
-
     CLI::initLogging(desc.name);
+    Detail::applyResourceBudget(opts);
 
     std::vector<std::string> frameFiles;
     const std::string framesArg = CLI::getString(opts, "--frames");
@@ -279,7 +293,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     outputBase = CLI::deriveOutputBase(filename, outputBase);
     spdlog::info("Output base: {} ({} frames, primary index {})", outputBase, frames.size(), primaryIndex);
 
-    json result = run(opts, frames, primaryIndex, outputBase);
+    json result = Detail::runWithinBudget([&]{ return run(opts, frames, primaryIndex, outputBase); });
 
     return Detail::reportFailure(result, desc) ? 1 : 0;
 }

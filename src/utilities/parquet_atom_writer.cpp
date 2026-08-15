@@ -190,8 +190,8 @@ void streamAtomsToParquet(
     }
 
     try {
-        duckdb::DuckDB db(nullptr);
-        duckdb::Connection con(db);
+        auto db = Volt::Detail::openInMemoryDb();
+        duckdb::Connection con(*db);
 
         // Build the table schema: fixed columns + dynamic columns in creation order.
         std::string ddl =

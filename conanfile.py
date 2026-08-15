@@ -5,10 +5,17 @@ from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
 
 class CoreToolkitConan(ConanFile):
     name = "coretoolkit"
-    version = "2.5.0"
+    version = "2.6.0"
     package_type = "static-library"
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
+    # Single source of truth for the release ISA baseline. It has to be an option
+    # rather than only a CMake cache variable, because package_info() below has to
+    # export the very same flag to consumers and cannot read CMake state.
+    #   x86-64-v3 = AVX2 + FMA + BMI2, i.e. Haswell (2013) and newer.
+    #   native    = tune to the build host; not portable, do not ship it.
+    #   off       = plain x86-64 (SSE2), the pre-2026-08 behaviour.
+    options = {"baseline_arch": ["off", "x86-64", "x86-64-v2", "x86-64-v3", "x86-64-v4", "native"]}
     requires = (
         "boost/1.88.0",
         # The trajectory reader core, shared with the daemon's Node addon so a format is
@@ -20,6 +27,7 @@ class CoreToolkitConan(ConanFile):
         "duckdb/1.4.3",
     )
     default_options = {
+        "baseline_arch": "x86-64-v3",
         "hwloc/*:shared": True,
         "onetbb/*:shared": False,
         # NOTE: boost/*:without_stacktrace is intentionally NOT set here. It is a
@@ -60,8 +68,43 @@ class CoreToolkitConan(ConanFile):
     def layout(self):
         cmake_layout(self)
 
+    def _release_arch_flags(self):
+        """Compile flags the whole VOLT stack must share, consumers included.
+
+        Historical trap this exists to close: these flags used to be applied only
+        with target_compile_options(coretoolkit PUBLIC ...) in CMakeLists.txt. That
+        propagates inside one build tree, but coretoolkit ships as a Conan package,
+        and PUBLIC options do not cross the package boundary — only what
+        package_info() puts in cpp_info survives. Measured 2026-08-14: every plugin
+        compiled at plain x86-64, and objdump found zero AVX2/FMA instructions in
+        ptm_polar.cpp.o and ptm_structure_matcher.cpp.o — the two files the
+        performance audit had measured 1.18-1.32x on. So verify with flags.make and
+        objdump, never by reading the CMakeLists.
+
+        -ffp-contract=fast is deliberately absent: GCC already defaults to it for
+        -std=gnu++2x, so exporting it would change nothing while reading like a
+        floating-point semantics change. geogram keeps -ffp-contract=off and
+        -frounding-math privately, because its exact predicates depend on them.
+        """
+        arch = str(self.options.baseline_arch)
+        if arch == "off" or str(self.settings.arch) not in ("x86_64", "x86_64v2", "x86_64v3"):
+            flags = []
+        elif arch == "native":
+            flags = ["-march=native"]
+        else:
+            flags = ["-march=" + arch]
+        # Neither of these changes results; they only let the optimiser drop
+        # errno/trap bookkeeping around libm calls.
+        return flags + ["-fno-math-errno", "-fno-trapping-math"]
+
     def generate(self):
-        CMakeToolchain(self).generate()
+        tc = CMakeToolchain(self)
+        arch = str(self.options.baseline_arch)
+        if arch == "native":
+            tc.cache_variables["VOLT_ENABLE_NATIVE_OPTIMIZATIONS"] = True
+        elif arch != "off":
+            tc.cache_variables["VOLT_BASELINE_ARCH"] = arch
+        tc.generate()
         CMakeDeps(self).generate()
 
     def build(self):
@@ -77,6 +120,13 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.set_property("cmake_target_name", "coretoolkit::coretoolkit")
         self.cpp_info.libs = ["coretoolkit", "mwm_csp", "geogram"]
         self.cpp_info.defines = ["GEO_STATIC_LIBS"]
+
+        # See _release_arch_flags(). Release only: a Debug consumer wants neither
+        # the ISA baseline nor the libm relaxations.
+        if self.settings.build_type == "Release":
+            arch_flags = self._release_arch_flags()
+            self.cpp_info.cflags.extend(arch_flags)
+            self.cpp_info.cxxflags.extend(arch_flags)
 
         # geogram is built with OpenMP so that its parallel Delaunay backend (PDEL)
         # has a working thread manager — OMPThreadManager is the only real one in the
@@ -94,6 +144,13 @@ class CoreToolkitConan(ConanFile):
         self.cpp_info.requires = [
             "boost::headers",
             "lammpsio::lammpsio",
+            # Has to be the aggregate: the onetbb recipe publishes a single "root"
+            # cpp_info component, so there is no onetbb::tbb to require and no way to
+            # drop tbbmalloc_proxy here. The aggregate puts the proxy on every link
+            # line, and the proxy interposes the process-wide operator new / malloc,
+            # so the pairing is pinned at link time instead — see the tbbmalloc block
+            # in cmake/VoltPlugin.cmake for the mismatch that caused and how it is
+            # closed.
             "onetbb::onetbb",
             "spdlog::spdlog",
             "nlohmann_json::nlohmann_json",

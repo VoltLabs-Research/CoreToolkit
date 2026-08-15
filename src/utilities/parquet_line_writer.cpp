@@ -171,8 +171,8 @@ void streamLinesToParquet(
     }
 
     try {
-        duckdb::DuckDB db(nullptr);
-        duckdb::Connection con(db);
+        auto db = Volt::Detail::openInMemoryDb();
+        duckdb::Connection con(*db);
 
         // Build the table schema: fixed columns + dynamic columns in creation order.
         std::string ddl = "CREATE TABLE lines(id UBIGINT, points DOUBLE[][]";

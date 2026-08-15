@@ -22,7 +22,6 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
     binCell.translation() = simCell.matrix().translation();
     std::array<Vector3, 3> planeNormals;
 
-    // Determine the number of bins along each simulation cell vector
     const int binCountLimit = 128 * 128 * 128;
     for(size_t i = 0; i < 3; i++){
         planeNormals[i] = simCell.cellNormalVector(i);
@@ -30,10 +29,8 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
         binDim[i] = std::max((int) floor(std::min(x, double(binCountLimit))), 1);
     }
 
-    // Impose limit on the total number of bins
     int binCount = (int) binDim[0] * (int) binDim[1] * (int) binDim[2];
     
-    // Reduce bin count in each dimension by the same fraction to stay below total upper limit
     if(binCount > binCountLimit){
         double factor = pow((double) binCountLimit / binCount, 1.0 / 3.0);
         for(size_t i = 0; i < 3; i++){
@@ -44,25 +41,20 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
     binCount = (int) binDim[0] * (int) binDim[1] * (int) binDim[2];
     assert(binCount < 0xFFFFFFFF);
 
-    // Compute bin cell
     for(size_t i = 0; i < 3; i++){
         binCell.column(i) = simCell.matrix().column(i) / binDim[i];
     }
 
     reciprocalBinCell = binCell.inverse();
 
-    // This helper functions computes the shortest distance between a point and a bin cell located at the origin
 	auto shortestCellCellDistance = [binCell, planeNormals](const Vector3I& d) {
         Vector3 p = binCell * Vector3(d);
-        // Compute distance from point to corner
         double distSq = p.squaredLength();
         for(size_t dim = 0; dim < 3; dim++){
-            // Compute shortest distance from point to edge
             double t = -p.dot(binCell.column(dim)) / binCell.column(dim).squaredLength();
             if(t > 0 && t < 1){
                 distSq = std::min(distSq, (p - t * binCell.column(dim)).squaredLength());
             }
-            // Compute shortest distance from point to cell face
             const Vector3& u = binCell.column((dim+1)%3);
 			const Vector3& v = binCell.column((dim+2)%3);
 			const Vector3& n = planeNormals[dim];
@@ -112,10 +104,6 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
         if(stencil.size() == oldCount) break;
     }
 
-    // Sort particles into a contiguous counting-sort layout instead of per-bin
-    // linked lists. The per-atom wrap + bin assignment is independent, so it
-    // runs in parallel; within a bin we keep indices highest-first to match the
-    // previous linked-list (prepend) order, so neighbor queries stay identical.
     const size_t N = positions->size();
     particles.resize(N);
     std::vector<uint32_t> binOf(N);
@@ -127,7 +115,6 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
             a.pos = p[pindex];
             a.pbcShift.setZero();
 
-            // Determine the bin the atom is located in
             Point3 rp = reciprocalBinCell * p[pindex];
             Point3I binLocation;
             for(size_t k = 0; k < 3; k++){
@@ -152,15 +139,12 @@ bool CutoffNeighborFinder::prepare(double cutoffRadius, ParticleProperty* positi
         }
     });
 
-    // Counting sort: histogram of bin sizes -> prefix sum -> scatter.
     binStart.assign((size_t)binCount + 1, 0);
     for(size_t i = 0; i < N; i++) binStart[binOf[i] + 1]++;
     for(int b = 0; b < binCount; b++) binStart[b + 1] += binStart[b];
 
     binnedIndices.resize(N);
     std::vector<uint32_t> writePos(binStart.begin(), binStart.end() - 1);
-    // Iterate descending so each bin's lowest offset gets its highest particle
-    // index, reproducing the linked-list prepend order exactly.
     for(size_t i = N; i-- > 0; ){
         binnedIndices[writePos[binOf[i]]++] = (uint32_t)i;
     }
@@ -179,7 +163,6 @@ CutoffNeighborFinder::Query::Query(const CutoffNeighborFinder& finder, size_t pa
 	_center = _builder.particles[particleIndex].pos;
 	_neighborIndex = std::numeric_limits<size_t>::max();
 
-    // Determine the bin the central particle is located in
     for(size_t k = 0; k < 3; k++){
         _centerBin[k] = (int) floor(_builder.reciprocalBinCell.prodrow(_center, k));
         if(_centerBin[k] < 0) _centerBin[k] = 0;
@@ -189,7 +172,6 @@ CutoffNeighborFinder::Query::Query(const CutoffNeighborFinder& finder, size_t pa
     next();
 }
 
-// Iterator function
 void CutoffNeighborFinder::Query::next(){
     assert(!_atEnd);
     

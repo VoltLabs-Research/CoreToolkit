@@ -154,8 +154,6 @@ inline std::optional<int> handleIntrospection(
 
 namespace Detail {
 
-// Resolves --threads once and pushes it into every pool this process owns. See
-// volt/core/runtime_budget.h for why that has to happen in one place.
 inline void applyResourceBudget(const OptsMap& opts) {
     const int requestedThreads = std::max(1, CLI::getInt(opts, "--threads",
         std::thread::hardware_concurrency() > 0
@@ -167,9 +165,6 @@ inline void applyResourceBudget(const OptsMap& opts) {
     }
 }
 
-// Runs `body` inside the NUMA arena when one was created, so the analysis and its
-// allocations stay on the node this process was bound to. Without a binding this
-// is a plain call — no arena, no behaviour change.
 template <class Body>
 inline auto runWithinBudget(Body&& body) -> decltype(body()) {
     decltype(body()) result{};

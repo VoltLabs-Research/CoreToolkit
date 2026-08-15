@@ -70,9 +70,6 @@ public:
         std::vector<Point3> positions;
         std::vector<int> types;
         std::vector<int> ids;
-        // Periodic image flags (ix/iy/iz dump columns). Empty when the dump lacks
-        // them; multi-frame transforms (unwrap) use them when present and fall
-        // back to a frame-0 minimum-image scan otherwise.
         std::vector<int> imageX;
         std::vector<int> imageY;
         std::vector<int> imageZ;

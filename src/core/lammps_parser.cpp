@@ -556,18 +556,6 @@ inline bool writeMergedDump(
     return static_cast<bool>(out);
 }
 
-
-/**
- * Converts a frame from the shared reader into the Frame this toolkit works with.
- *
- * The two models line up closely; the differences worth knowing:
- *  - positions arrive as a flat xyz buffer and become Point3, one copy, no conversion
- *  - types and ids are int here and unsigned there, which is fine for LAMMPS ranges
- *  - the reader hands back Cartesian positions even when the file held fractional ones,
- *    so atomColumnsScaled records the *source* for a caller re-emitting the file
- *  - the reader has no concept of an "extra header", so unrecognized ITEM sections travel
- *    as ordered name/value pairs and are unpacked into headerOrder/headerProperties
- */
 inline bool toFrame(const lammpsio::ParsedFrame& parsed,
                    const lammpsio::VectorFrameAllocator& allocator,
                    LammpsParser::Frame& frame){
@@ -637,8 +625,6 @@ inline bool toFrame(const lammpsio::ParsedFrame& parsed,
         }
         frame.atomProperties[column.name] = std::move(converted);
 
-        // Periodic image flags get their own fields: the multi-frame transforms reach for
-        // them directly rather than through the column map.
         std::vector<int>* image = nullptr;
         if(column.name == "ix") image = &frame.imageX;
         else if(column.name == "iy") image = &frame.imageY;
@@ -653,28 +639,16 @@ inline bool toFrame(const lammpsio::ParsedFrame& parsed,
     return true;
 }
 
-} // namespace LammpsParserDetail
+}
 
 using namespace LammpsParserDetail;
 
-// Reads any trajectory format the shared reader supports into a Frame.
-//
-// The parsing itself lives in lammpsio, the same code the daemon's Node addon uses, so a
-// format fix or a new format lands once for both. What stays here is the conversion into
-// this Frame — the shape ten plugins are written against — and the writers, which the
-// reader has no counterpart for.
 bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
     lammpsio::ReadOptions options;
     options.includeIds = true;
-    // Every per-atom column the file carries: a plugin asks for its own by name later, and
-    // the round-trip writer needs all of them.
     options.properties = { "*" };
-    // One thread: callers are already inside a parallel region more often than not, and a
-    // nested pool would fight the one that scheduled them.
     options.maxThreads = 1;
 
-    // float64 positions. The geometry in this toolkit is double throughout, and strain and
-    // dislocation analysis are sensitive to the difference.
     lammpsio::VectorFrameAllocator allocator(lammpsio::PositionPrecision::Float64);
     lammpsio::ParsedFrame parsed;
     std::string error;
@@ -802,9 +776,5 @@ bool LammpsParser::writeFileMergedWithExtraColumns(
         overwriteExistingColumns
     );
 }
-
-// Parse a LAMMPS dump from any input stream.
-// Return header lines, box bounds, and atom data in sequence.
-// If any stage fails, the function aborts and returns false.
 
 }

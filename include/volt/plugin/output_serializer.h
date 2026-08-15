@@ -13,19 +13,10 @@ namespace Volt::Plugin {
 using json = nlohmann::json;
 
 struct OutputConfig {
-    // Suffix for the summary table (e.g. "_cluster_analysis"); empty to skip.
     std::string summaryFileSuffix;
-    // Assigns a bucket name per atom; drives the `bucket`/`structure_*` columns.
     BucketResolver bucketResolver;
-    // Emits the plugin's per-atom property columns (coordination, csp, color...).
     PerAtomColumnWriter perAtomColumnWriter;
-    // Optional `structure_id` resolver. When empty, structure_id is the first-seen
-    // ordinal of the atom's bucket; classifiers (or mid-pipeline stages carrying an
-    // upstream classification forward) provide the real StructureType code here.
     StructureIdResolver resolveStructureId;
-    // structure_id/structure_name are OPT-IN: set true only in structural-identification
-    // plugins. Leaving the default off keeps a non-structural stage from clobbering an
-    // upstream classifier's structure_id during the daemon's per-column pipeline merge.
     bool includeStructureColumns = false;
 };
 
@@ -52,4 +43,4 @@ inline void serializePluginOutput(
     }
 }
 
-} // namespace Volt::Plugin
+}

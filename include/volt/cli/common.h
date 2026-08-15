@@ -26,11 +26,6 @@ inline void initLogging(const std::string& toolName = "Volt") {
     spdlog::set_default_logger(logger);
     spdlog::flush_on(spdlog::level::info);
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S] [%l] %v");
-    // Deliberately does not log a thread count. It used to print
-    // hardware_concurrency() here, unconditionally and after the line reporting the
-    // real budget, so every run emitted two contradictory numbers and the second
-    // one always claimed the full core count regardless of --threads. The single
-    // authoritative line now comes from Runtime::applyThreadBudget().
 }
 
 inline std::map<std::string, std::string> parseArgs(

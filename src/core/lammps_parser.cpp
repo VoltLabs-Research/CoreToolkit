@@ -30,12 +30,6 @@ namespace Volt{
 namespace LammpsParserDetail {
 
 
-inline const char* skipToken(const char* p, const char* end){
-    while(p < end && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') ++p;
-    return p;
-}
-
-
 enum class ColumnKind : unsigned char{
     Ignore,
     Id,
@@ -48,20 +42,6 @@ enum class ColumnKind : unsigned char{
     ImageZ,
     Extra
 };
-
-
-inline DataType resolveExtraColumnType(std::string_view name){
-    if(name == "correspondence"){
-        return DataType::Int64;
-    }
-    if(name == "structure_type" || name == "cluster_id" || name.ends_with("_id")){
-        return DataType::Int;
-    }
-    if(name.starts_with("orientation_")){
-        return DataType::Double;
-    }
-    return DataType::Double;
-}
 
 
 struct DumpBoxBounds{

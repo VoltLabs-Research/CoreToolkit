@@ -10,50 +10,8 @@
 
 namespace Volt {
 
-namespace {
-
-enum class ColType { Double, Int64, String, ListDouble };
-
-struct DynColumn {
-    std::string name;
-    ColType type;
-    std::vector<duckdb::Value> values;
-    bool touchedThisRow = false;
-};
-
-duckdb::LogicalType logicalTypeFor(ColType type){
-    switch(type){
-        case ColType::Double:     return duckdb::LogicalType::DOUBLE;
-        case ColType::Int64:      return duckdb::LogicalType::BIGINT;
-        case ColType::String:     return duckdb::LogicalType::VARCHAR;
-        case ColType::ListDouble: return duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
-    }
-    return duckdb::LogicalType::DOUBLE;
-}
-
-const char* sqlTypeFor(ColType type){
-    switch(type){
-        case ColType::Double:     return "DOUBLE";
-        case ColType::Int64:      return "BIGINT";
-        case ColType::String:     return "VARCHAR";
-        case ColType::ListDouble: return "DOUBLE[]";
-    }
-    return "DOUBLE";
-}
-
-std::string quoteIdent(const std::string& name){
-    std::string out;
-    out.reserve(name.size() + 2);
-    out.push_back('"');
-    for(char c : name){
-        if(c == '"') out.push_back('"');
-        out.push_back(c);
-    }
-    out.push_back('"');
-    return out;
-}
-
-}
+using ColType = Detail::ColType;
+using DynColumn = Detail::DynColumn;
 
 struct ColumnarLineWriter::Impl {
     std::vector<DynColumn> columns;
@@ -71,7 +29,7 @@ struct ColumnarLineWriter::Impl {
         DynColumn col;
         col.name = name;
         col.type = type;
-        const duckdb::LogicalType lt = logicalTypeFor(type);
+        const duckdb::LogicalType lt = Detail::logicalTypeFor(type);
         col.values.reserve(static_cast<std::size_t>(rowsCompleted) + 1);
         for(std::int64_t r = 0; r < rowsCompleted; ++r) col.values.emplace_back(lt);
 
@@ -112,7 +70,7 @@ struct ColumnarLineWriter::Impl {
 
     void finishRow(){
         for(auto& c : columns){
-            if(!c.touchedThisRow) c.values.emplace_back(logicalTypeFor(c.type));
+            if(!c.touchedThisRow) c.values.emplace_back(Detail::logicalTypeFor(c.type));
             c.touchedThisRow = false;
         }
         ++rowsCompleted;
@@ -165,9 +123,9 @@ void streamLinesToParquet(
         std::string ddl = "CREATE TABLE lines(id UBIGINT, points DOUBLE[][]";
         for(const auto& col : dyn.columns){
             ddl += ", ";
-            ddl += quoteIdent(col.name);
+            ddl += Detail::quoteIdent(col.name);
             ddl += ' ';
-            ddl += sqlTypeFor(col.type);
+            ddl += Detail::sqlTypeFor(col.type);
         }
         ddl += ')';
         if(con.Query(ddl)->HasError()) return;

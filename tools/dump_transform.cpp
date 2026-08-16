@@ -14,8 +14,6 @@
 #include <unordered_map>
 #include <vector>
 
-namespace{
-
 using Volt::LammpsParser;
 using Volt::Particles::DataType;
 using Volt::Particles::ParticleProperty;
@@ -384,8 +382,6 @@ bool runMerge(const LammpsParser::Frame& frame, const std::string& parquetPath, 
     LammpsParser parser;
     return parser.writeFileMergedWithExtraColumns(
         output, frame, propertyAtomIds, extraColumns, /*extraHeaders*/ {}, /*overwriteExistingColumns*/ true);
-}
-
 }
 
 int main(int argc, char** argv){

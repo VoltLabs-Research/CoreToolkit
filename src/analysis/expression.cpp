@@ -8,8 +8,6 @@
 
 namespace Volt::Analysis{
 
-namespace{
-
 enum class TokenType{ Number, Identifier, String, Operator, LParen, RParen, Comma, Dot, Eof };
 
 struct Token{
@@ -500,8 +498,6 @@ Value evalNode(const Expr& expr, const AtomContext& context, std::size_t atomInd
         }
     }
     return 0.0;
-}
-
 }
 
 Expr parse(const std::string& formula){

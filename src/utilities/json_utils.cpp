@@ -7,8 +7,6 @@
 
 namespace Volt {
 
-namespace {
-
 std::string normalizeParquetPath(const std::string& filePath){
     const std::string ext = ".parquet";
     if(filePath.size() >= ext.size() &&
@@ -21,8 +19,6 @@ std::string normalizeParquetPath(const std::string& filePath){
         return filePath.substr(0, dot) + ext;
     }
     return filePath + ext;
-}
-
 }
 
 bool JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){

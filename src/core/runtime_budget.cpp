@@ -24,9 +24,7 @@
 
 namespace Volt::Runtime{
 
-namespace{
-
-int g_workers = 0;
+static int g_workers = 0;
 
 std::optional<tbb::global_control> g_tbbControl;
 
@@ -59,8 +57,6 @@ std::size_t totalSystemMemoryBytes(){
     }
 #endif
     return 0;
-}
-
 }
 
 void applyThreadBudget(int requestedWorkers){

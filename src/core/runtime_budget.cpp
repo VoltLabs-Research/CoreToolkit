@@ -72,7 +72,9 @@ void applyThreadBudget(int requestedWorkers){
     omp_set_dynamic(0);
 #endif
 
-    spdlog::info("CPU budget: {} worker threads (oneTBB, OpenMP, DuckDB, geogram)", g_workers);
+    spdlog::info("CPU budget: {} worker threads (oneTBB, OpenMP, geogram)", g_workers);
+    spdlog::info("DuckDB budget: {} threads, {} MiB memory limit",
+                 duckdbThreadBudget(), duckdbMemoryLimitBytes() / (1024ull * 1024ull));
 }
 
 int threadBudget(){
@@ -110,7 +112,15 @@ void runInBoundArena(const std::function<void()>& work){
 }
 
 int duckdbThreadBudget(){
-    return std::max(1, threadBudget());
+    constexpr std::size_t kMebi = 1024ull * 1024ull;
+    constexpr std::size_t kScanBudgetPerThreadMib = 32;
+
+    const int cpuThreads = std::max(1, threadBudget());
+    const std::size_t limitMib = duckdbMemoryLimitBytes() / kMebi;
+    const auto memoryThreads = static_cast<int>(
+        std::max<std::size_t>(1, limitMib / kScanBudgetPerThreadMib)
+    );
+    return std::min(cpuThreads, memoryThreads);
 }
 
 std::size_t duckdbMemoryLimitBytes(){

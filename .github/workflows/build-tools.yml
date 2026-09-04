@@ -1,0 +1,169 @@
+name: Build tools
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: volt-dump-transform (${{ matrix.os_slug }}-${{ matrix.arch_slug }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_slug: linux
+            arch_slug: x86_64
+          - os: macos-latest
+            os_slug: darwin
+            arch_slug: arm64
+          # windows-2022: ConanCenter only ships prebuilt binaries for MSVC 194 (see
+          # build-plugin-binary.yml for the full story).
+          - os: windows-2022
+            os_slug: windows
+            arch_slug: x86_64
+    steps:
+      - name: Check out CoreToolkit
+        uses: actions/checkout@v4
+        with:
+          path: coretoolkit
+
+      - name: Check out LammpsIO
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/LammpsIO
+          path: lammpsio
+
+      - name: Set up MSVC developer shell
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip conan
+          conan profile detect --force
+
+      - name: Cache Conan packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-v1-${{ matrix.os }}-${{ hashFiles('coretoolkit/conanfile.py') }}
+          restore-keys: |
+            conan-v1-${{ matrix.os }}-
+
+      - name: Build volt-dump-transform
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          coretoolkit_dir="$PWD/coretoolkit"
+          build_dir="$PWD/build"
+          install_dir="$PWD/.ci-install"
+          mkdir -p "$install_dir"
+
+          conan export "$PWD/lammpsio"
+
+          # Same dependency settings as build-plugin-binary.yml, so the tool and the
+          # plugins share one Conan cache and one ABI story.
+          conan_args=(
+            -o "hwloc/*:shared=True"
+            --build=missing
+            -s build_type=Release
+            -s compiler.cppstd=17
+            -s "&:compiler.cppstd=23"
+          )
+          if [[ '${{ runner.os }}' == 'Linux' ]]; then
+            conan_args+=(-o "boost/*:without_stacktrace=True")
+          fi
+          if [[ '${{ runner.os }}' == 'Windows' ]]; then
+            conan_args+=(-s "compiler.version=194")
+          fi
+
+          conan install "$coretoolkit_dir" "${conan_args[@]}" --output-folder "$build_dir"
+
+          toolchain_path="$(find "$build_dir" -path '*/generators/conan_toolchain.cmake' | head -n 1)"
+          if [[ -z "$toolchain_path" ]]; then
+            echo 'Unable to locate conan_toolchain.cmake' >&2
+            exit 1
+          fi
+          cmake_build_dir="$(cd "$(dirname "$toolchain_path")/.." && pwd)"
+
+          cmake_args=(
+            -S "$coretoolkit_dir"
+            -B "$cmake_build_dir"
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain_path"
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
+            "-DCMAKE_INSTALL_PREFIX=$install_dir"
+          )
+          cmake "${cmake_args[@]}"
+          cmake --build "$cmake_build_dir" --config Release --parallel --target volt-dump-transform
+          cmake --install "$cmake_build_dir" --config Release
+
+          echo "build_dir=$build_dir" >> "$GITHUB_OUTPUT"
+          echo "install_dir=$install_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$PWD/coretoolkit/.github/scripts/build_tool_bundle.py" \
+            --tool volt-dump-transform \
+            --build-dir "${{ steps.build.outputs.build_dir }}" \
+            --install-dir "${{ steps.build.outputs.install_dir }}" \
+            --os "${{ matrix.os_slug }}" \
+            --arch "${{ matrix.arch_slug }}" \
+            --output-dir "$PWD/artifacts"
+
+      - name: Smoke-run the bundled binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke && tar -xzf artifacts/volt-dump-transform-*.tar.gz -C smoke
+          binary="$(ls smoke/bin/volt-dump-transform*)"
+          set +e
+          "$binary" >/dev/null 2>&1
+          status=$?
+          set -e
+          # No arguments prints usage and exits 2; anything else means the binary
+          # could not even start (missing shared library, wrong architecture).
+          test "$status" -eq 2
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: volt-dump-transform-${{ matrix.os_slug }}-${{ matrix.arch_slug }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Attach to release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: volt-dump-transform-*
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          fail_on_unmatched_files: true

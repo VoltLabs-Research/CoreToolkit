@@ -4,7 +4,10 @@
 
 #include <duckdb.hpp>
 
+#include <filesystem>
 #include <memory>
+#include <stdexcept>
+#include <system_error>
 #include <string>
 #include <vector>
 
@@ -31,14 +34,20 @@ inline std::string sqlQuote(const std::string& path){
     return out;
 }
 
-inline bool copyTableToParquet(duckdb::Connection& con,
+inline void copyTableToParquet(duckdb::Connection& con,
                                const std::string& table,
                                const std::string& outputPath){
     const std::string sql =
         "COPY " + table + " TO " + sqlQuote(outputPath) +
         " (FORMAT PARQUET, COMPRESSION ZSTD)";
     auto result = con.Query(sql);
-    return !result->HasError();
+    if(!result->HasError()) return;
+
+    std::error_code discard;
+    std::filesystem::remove(outputPath, discard);
+    throw std::runtime_error(
+        "Failed to write Parquet file " + outputPath + ": " + result->GetError()
+    );
 }
 
 enum class ColType { Double, Int64, String, ListDouble };

@@ -4,6 +4,7 @@
 #include <duckdb.hpp>
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -119,47 +120,49 @@ void streamBondsToParquet(
         dyn.finishRow();
     }
 
-    try {
-        auto db = Volt::Detail::openInMemoryDb();
-        duckdb::Connection con(*db);
+    auto db = Volt::Detail::openInMemoryDb();
+    duckdb::Connection con(*db);
 
-        std::string ddl =
-            "CREATE TABLE bonds("
-            "id UBIGINT, points DOUBLE[][], atom_a INTEGER, atom_b INTEGER, "
-            "pbc_shift_x INTEGER, pbc_shift_y INTEGER, pbc_shift_z INTEGER, distance DOUBLE";
-        for(const auto& col : dyn.columns){
-            ddl += ", ";
-            ddl += Detail::quoteIdent(col.name);
-            ddl += ' ';
-            ddl += Detail::sqlTypeFor(col.type);
-        }
-        ddl += ')';
-        if(con.Query(ddl)->HasError()) return;
-
-        {
-            duckdb::Appender appender(con, "bonds");
-            for(std::size_t i = 0; i < bondCount; ++i){
-                const Bond& bond = bonds[i];
-                appender.BeginRow();
-                appender.Append<std::uint64_t>(static_cast<std::uint64_t>(bond.id));
-                appender.Append(pointLists[i]);
-                appender.Append<std::int32_t>(bond.atomA);
-                appender.Append<std::int32_t>(bond.atomB);
-                appender.Append<std::int32_t>(bond.pbcShift[0]);
-                appender.Append<std::int32_t>(bond.pbcShift[1]);
-                appender.Append<std::int32_t>(bond.pbcShift[2]);
-                appender.Append<double>(bond.distance);
-                for(auto& col : dyn.columns){
-                    appender.Append(col.values[i]);
-                }
-                appender.EndRow();
-            }
-            appender.Close();
-        }
-
-        (void)Detail::copyTableToParquet(con, "bonds", filePath);
-    } catch (...) {
+    std::string ddl =
+        "CREATE TABLE bonds("
+        "id UBIGINT, points DOUBLE[][], atom_a INTEGER, atom_b INTEGER, "
+        "pbc_shift_x INTEGER, pbc_shift_y INTEGER, pbc_shift_z INTEGER, distance DOUBLE";
+    for(const auto& col : dyn.columns){
+        ddl += ", ";
+        ddl += Detail::quoteIdent(col.name);
+        ddl += ' ';
+        ddl += Detail::sqlTypeFor(col.type);
     }
+    ddl += ')';
+    auto created = con.Query(ddl);
+    if(created->HasError()){
+        throw std::runtime_error(
+            "Failed to stage bonds for " + filePath + ": " + created->GetError()
+        );
+    }
+
+    {
+        duckdb::Appender appender(con, "bonds");
+        for(std::size_t i = 0; i < bondCount; ++i){
+            const Bond& bond = bonds[i];
+            appender.BeginRow();
+            appender.Append<std::uint64_t>(static_cast<std::uint64_t>(bond.id));
+            appender.Append(pointLists[i]);
+            appender.Append<std::int32_t>(bond.atomA);
+            appender.Append<std::int32_t>(bond.atomB);
+            appender.Append<std::int32_t>(bond.pbcShift[0]);
+            appender.Append<std::int32_t>(bond.pbcShift[1]);
+            appender.Append<std::int32_t>(bond.pbcShift[2]);
+            appender.Append<double>(bond.distance);
+            for(auto& col : dyn.columns){
+                appender.Append(col.values[i]);
+            }
+            appender.EndRow();
+        }
+        appender.Close();
+    }
+
+    Detail::copyTableToParquet(con, "bonds", filePath);
 }
 
 }

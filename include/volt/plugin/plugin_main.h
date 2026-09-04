@@ -9,6 +9,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -172,6 +173,17 @@ inline auto runWithinBudget(Body&& body) -> decltype(body()) {
     return result;
 }
 
+template <class Body>
+inline json runReportingFailures(Body&& body) {
+    try {
+        return runWithinBudget(std::forward<Body>(body));
+    } catch (const std::exception& error) {
+        return json{{"is_failed", true}, {"error", error.what()}};
+    } catch (...) {
+        return json{{"is_failed", true}, {"error", "Unknown error"}};
+    }
+}
+
 inline std::vector<std::string> splitFrameList(const std::string& raw) {
     std::vector<std::string> files;
     std::string current;
@@ -244,7 +256,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     outputBase = CLI::deriveOutputBase(filename, outputBase);
     spdlog::info("Output base: {}", outputBase);
 
-    json result = Detail::runWithinBudget([&]{ return run(opts, frame, refFramePtr, outputBase); });
+    json result = Detail::runReportingFailures([&]{ return run(opts, frame, refFramePtr, outputBase); });
 
     return Detail::reportFailure(result, desc) ? 1 : 0;
 }
@@ -288,7 +300,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     outputBase = CLI::deriveOutputBase(filename, outputBase);
     spdlog::info("Output base: {} ({} frames, primary index {})", outputBase, frames.size(), primaryIndex);
 
-    json result = Detail::runWithinBudget([&]{ return run(opts, frames, primaryIndex, outputBase); });
+    json result = Detail::runReportingFailures([&]{ return run(opts, frames, primaryIndex, outputBase); });
 
     return Detail::reportFailure(result, desc) ? 1 : 0;
 }

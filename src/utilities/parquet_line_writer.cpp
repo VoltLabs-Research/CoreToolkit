@@ -4,6 +4,7 @@
 #include <duckdb.hpp>
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -116,37 +117,39 @@ void streamLinesToParquet(
         dyn.finishRow();
     }
 
-    try {
-        auto db = Volt::Detail::openInMemoryDb();
-        duckdb::Connection con(*db);
+    auto db = Volt::Detail::openInMemoryDb();
+    duckdb::Connection con(*db);
 
-        std::string ddl = "CREATE TABLE lines(id UBIGINT, points DOUBLE[][]";
-        for(const auto& col : dyn.columns){
-            ddl += ", ";
-            ddl += Detail::quoteIdent(col.name);
-            ddl += ' ';
-            ddl += Detail::sqlTypeFor(col.type);
-        }
-        ddl += ')';
-        if(con.Query(ddl)->HasError()) return;
-
-        {
-            duckdb::Appender appender(con, "lines");
-            for(std::size_t i = 0; i < lineCount; ++i){
-                appender.BeginRow();
-                appender.Append<std::uint64_t>(static_cast<std::uint64_t>(i));
-                appender.Append(pointLists[i]);
-                for(auto& col : dyn.columns){
-                    appender.Append(col.values[i]);
-                }
-                appender.EndRow();
-            }
-            appender.Close();
-        }
-
-        (void)Detail::copyTableToParquet(con, "lines", filePath);
-    } catch (...) {
+    std::string ddl = "CREATE TABLE lines(id UBIGINT, points DOUBLE[][]";
+    for(const auto& col : dyn.columns){
+        ddl += ", ";
+        ddl += Detail::quoteIdent(col.name);
+        ddl += ' ';
+        ddl += Detail::sqlTypeFor(col.type);
     }
+    ddl += ')';
+    auto created = con.Query(ddl);
+    if(created->HasError()){
+        throw std::runtime_error(
+            "Failed to stage lines for " + filePath + ": " + created->GetError()
+        );
+    }
+
+    {
+        duckdb::Appender appender(con, "lines");
+        for(std::size_t i = 0; i < lineCount; ++i){
+            appender.BeginRow();
+            appender.Append<std::uint64_t>(static_cast<std::uint64_t>(i));
+            appender.Append(pointLists[i]);
+            for(auto& col : dyn.columns){
+                appender.Append(col.values[i]);
+            }
+            appender.EndRow();
+        }
+        appender.Close();
+    }
+
+    Detail::copyTableToParquet(con, "lines", filePath);
 }
 
 }

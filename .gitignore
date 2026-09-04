@@ -58,3 +58,9 @@ output/
 *.sha256
 CLAUDE.md
 build-docker/
+# Repowise
+.repowise
+
+# MCP and Claude
+.mcp.json
+.claude

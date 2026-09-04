@@ -185,6 +185,9 @@ if(UNIX AND NOT APPLE)
         -static-libstdc++ -static-libgcc
         "LINKER:-rpath,$ORIGIN")
 endif()
+if(APPLE)
+    target_link_options(volt-dump-transform PRIVATE "LINKER:-rpath,@loader_path")
+endif()
 install(TARGETS volt-dump-transform DESTINATION bin)
 
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC).

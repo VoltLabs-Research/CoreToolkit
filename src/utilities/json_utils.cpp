@@ -3,6 +3,7 @@
 
 #include <duckdb.hpp>
 
+#include <stdexcept>
 #include <string>
 
 namespace Volt {
@@ -21,26 +22,27 @@ std::string normalizeParquetPath(const std::string& filePath){
     return filePath + ext;
 }
 
-bool JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
+void JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
     const std::string outputPath = normalizeParquetPath(filePath);
-    try {
-        auto db = Volt::Detail::openInMemoryDb();
-        duckdb::Connection con(*db);
+    auto db = Volt::Detail::openInMemoryDb();
+    duckdb::Connection con(*db);
 
-        if(con.Query("CREATE TABLE t(payload VARCHAR)")->HasError()) return false;
-
-        {
-            duckdb::Appender appender(con, "t");
-            appender.BeginRow();
-            appender.Append(duckdb::Value(data.dump()));
-            appender.EndRow();
-            appender.Close();
-        }
-
-        return Detail::copyTableToParquet(con, "t", outputPath);
-    } catch (...) {
-        return false;
+    auto created = con.Query("CREATE TABLE t(payload VARCHAR)");
+    if(created->HasError()){
+        throw std::runtime_error(
+            "Failed to stage payload for " + outputPath + ": " + created->GetError()
+        );
     }
+
+    {
+        duckdb::Appender appender(con, "t");
+        appender.BeginRow();
+        appender.Append(duckdb::Value(data.dump()));
+        appender.EndRow();
+        appender.Close();
+    }
+
+    Detail::copyTableToParquet(con, "t", outputPath);
 }
 
 bool JsonUtils::writeJsonToFile(const json& data, const std::string& filePath, int indent){

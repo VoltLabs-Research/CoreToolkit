@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -135,50 +136,52 @@ void streamAtomsToParquet(
         dyn.finishRow();
     }
 
-    try {
-        auto db = Volt::Detail::openInMemoryDb();
-        duckdb::Connection con(*db);
+    auto db = Volt::Detail::openInMemoryDb();
+    duckdb::Connection con(*db);
 
-        std::string ddl =
-            "CREATE TABLE atoms("
-            "atom_index UINTEGER, id UBIGINT, x DOUBLE, y DOUBLE, z DOUBLE, "
-            "bucket VARCHAR";
-        if(includeStructureColumns)
-            ddl += ", structure_id INTEGER, structure_name VARCHAR";
-        for(const auto& col : dyn.columns){
-            ddl += ", ";
-            ddl += Detail::quoteIdent(col.name);
-            ddl += ' ';
-            ddl += Detail::sqlTypeFor(col.type);
-        }
-        ddl += ')';
-        if(con.Query(ddl)->HasError()) return;
-
-        {
-            duckdb::Appender appender(con, "atoms");
-            for(std::size_t i = 0; i < natoms; ++i){
-                appender.BeginRow();
-                appender.Append<std::uint32_t>(atomIndex[i]);
-                appender.Append<std::uint64_t>(ids[i]);
-                appender.Append<double>(xs[i]);
-                appender.Append<double>(ys[i]);
-                appender.Append<double>(zs[i]);
-                appender.Append(duckdb::Value(buckets[i]));
-                if(includeStructureColumns){
-                    appender.Append<std::int32_t>(structureIds[i]);
-                    appender.Append(duckdb::Value(buckets[i]));
-                }
-                for(auto& col : dyn.columns){
-                    appender.Append(col.values[i]);
-                }
-                appender.EndRow();
-            }
-            appender.Close();
-        }
-
-        (void)Detail::copyTableToParquet(con, "atoms", filePath);
-    } catch (...) {
+    std::string ddl =
+        "CREATE TABLE atoms("
+        "atom_index UINTEGER, id UBIGINT, x DOUBLE, y DOUBLE, z DOUBLE, "
+        "bucket VARCHAR";
+    if(includeStructureColumns)
+        ddl += ", structure_id INTEGER, structure_name VARCHAR";
+    for(const auto& col : dyn.columns){
+        ddl += ", ";
+        ddl += Detail::quoteIdent(col.name);
+        ddl += ' ';
+        ddl += Detail::sqlTypeFor(col.type);
     }
+    ddl += ')';
+    auto created = con.Query(ddl);
+    if(created->HasError()){
+        throw std::runtime_error(
+            "Failed to stage atoms for " + filePath + ": " + created->GetError()
+        );
+    }
+
+    {
+        duckdb::Appender appender(con, "atoms");
+        for(std::size_t i = 0; i < natoms; ++i){
+            appender.BeginRow();
+            appender.Append<std::uint32_t>(atomIndex[i]);
+            appender.Append<std::uint64_t>(ids[i]);
+            appender.Append<double>(xs[i]);
+            appender.Append<double>(ys[i]);
+            appender.Append<double>(zs[i]);
+            appender.Append(duckdb::Value(buckets[i]));
+            if(includeStructureColumns){
+                appender.Append<std::int32_t>(structureIds[i]);
+                appender.Append(duckdb::Value(buckets[i]));
+            }
+            for(auto& col : dyn.columns){
+                appender.Append(col.values[i]);
+            }
+            appender.EndRow();
+        }
+        appender.Close();
+    }
+
+    Detail::copyTableToParquet(con, "atoms", filePath);
 }
 
 }

@@ -11,7 +11,7 @@ using json = nlohmann::json;
 
 class JsonUtils {
 public:
-    static bool writeJsonToParquet(const json& data, const std::string& filePath, bool = false);
+    static void writeJsonToParquet(const json& data, const std::string& filePath, bool = false);
 
     static bool writeJsonToFile(const json& data, const std::string& filePath, int indent = 2);
 };

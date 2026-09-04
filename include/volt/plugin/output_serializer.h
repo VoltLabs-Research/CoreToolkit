@@ -28,11 +28,8 @@ inline void serializePluginOutput(
 ) {
     if (!config.summaryFileSuffix.empty()) {
         const std::string outputPath = outputBase + config.summaryFileSuffix + ".parquet";
-        if (JsonUtils::writeJsonToParquet(result, outputPath)) {
-            spdlog::info("Summary parquet written to {}", outputPath);
-        } else {
-            spdlog::warn("Could not write summary parquet: {}", outputPath);
-        }
+        JsonUtils::writeJsonToParquet(result, outputPath);
+        spdlog::info("Summary parquet written to {}", outputPath);
     }
 
     if (config.bucketResolver) {

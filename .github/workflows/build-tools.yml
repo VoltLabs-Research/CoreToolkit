@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to attach the built tools to (empty = build only)
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -53,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip conan
+          python -m pip install --upgrade pip conan zstandard
           conan profile detect --force
 
       - name: Cache Conan packages
@@ -153,7 +159,7 @@ jobs:
   release:
     name: Attach to release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -165,5 +171,6 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           files: artifacts/*
           fail_on_unmatched_files: true

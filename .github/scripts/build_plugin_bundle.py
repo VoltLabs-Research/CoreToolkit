@@ -31,8 +31,6 @@ import sys
 import tarfile
 from pathlib import Path
 
-import zstandard
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -249,6 +247,8 @@ def _copy_runtime_artifact(source: Path, target: Path) -> None:
 
 
 def _pack(source: Path, target: Path) -> None:
+    import zstandard
+
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
         for entry in sorted(source.rglob("*")):

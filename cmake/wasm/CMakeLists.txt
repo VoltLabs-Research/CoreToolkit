@@ -64,7 +64,8 @@ endif()
 set(VOLT_BOOST_ROOT "" CACHE PATH "Pre-extracted Boost headers root (contains boost/)")
 if(NOT VOLT_BOOST_ROOT)
     FetchContent_Declare(boost_headers_src
-        URL https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.xz
+        URL https://archives.boost.io/release/1.88.0/source/boost_1_88_0.tar.gz
+        URL_HASH SHA256=3621533e820dcab1e8012afd583c0c73cf0f77694952b81352bf38c1488f9cb4
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
     FetchContent_GetProperties(boost_headers_src)
@@ -72,6 +73,14 @@ if(NOT VOLT_BOOST_ROOT)
         FetchContent_Populate(boost_headers_src)
     endif()
     set(VOLT_BOOST_ROOT "${boost_headers_src_SOURCE_DIR}")
+endif()
+if(NOT EXISTS "${VOLT_BOOST_ROOT}/boost/dynamic_bitset.hpp")
+    file(GLOB_RECURSE _boost_probe "${VOLT_BOOST_ROOT}/*/boost/dynamic_bitset.hpp")
+    if(_boost_probe)
+        list(GET _boost_probe 0 _boost_header)
+        get_filename_component(_boost_include "${_boost_header}" DIRECTORY)
+        get_filename_component(VOLT_BOOST_ROOT "${_boost_include}" DIRECTORY)
+    endif()
 endif()
 if(NOT EXISTS "${VOLT_BOOST_ROOT}/boost/dynamic_bitset.hpp")
     message(FATAL_ERROR "Boost headers not found under ${VOLT_BOOST_ROOT}")

@@ -72,9 +72,13 @@ void applyThreadBudget(int requestedWorkers){
     omp_set_dynamic(0);
 #endif
 
+#if defined(VOLT_PLATFORM_WASM) || defined(__EMSCRIPTEN__)
+    spdlog::info("CPU budget: {} worker thread (wasm serial runtime)", g_workers);
+#else
     spdlog::info("CPU budget: {} worker threads (oneTBB, OpenMP, geogram)", g_workers);
     spdlog::info("DuckDB budget: {} threads, {} MiB memory limit",
                  duckdbThreadBudget(), duckdbMemoryLimitBytes() / (1024ull * 1024ull));
+#endif
 }
 
 int threadBudget(){
@@ -132,7 +136,8 @@ std::size_t duckdbMemoryLimitBytes(){
 
     const std::size_t total = totalSystemMemoryBytes();
     const std::size_t quarter = total > 0 ? total / 4 : 2048ull * kMebi;
-    return std::min<std::size_t>(quarter, 4096ull * kMebi);
+    constexpr std::size_t kCap = static_cast<std::size_t>(4096) * kMebi;
+    return std::min<std::size_t>(quarter, kCap);
 }
 
 }

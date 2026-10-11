@@ -641,6 +641,29 @@ bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
     return LammpsParserDetail::toFrame(parsed, allocator, frame);
 }
 
+bool LammpsParser::parseBuffer(const char* data, std::size_t size, Frame &frame){
+    if(!data || size == 0){
+        std::cerr << "Error: empty trajectory buffer" << std::endl;
+        return false;
+    }
+
+    lammpsio::ReadOptions options;
+    options.includeIds = true;
+    options.properties = { "*" };
+    options.maxThreads = 1;
+
+    lammpsio::VectorFrameAllocator allocator(lammpsio::PositionPrecision::Float64);
+    lammpsio::ParsedFrame parsed;
+    std::string error;
+
+    if(!lammpsio::readFrameBuffer(data, size, options, allocator, parsed, error)){
+        std::cerr << "Error: " << error << std::endl;
+        return false;
+    }
+
+    return LammpsParserDetail::toFrame(parsed, allocator, frame);
+}
+
 bool LammpsParser::writeFile(const std::string& filename, const Frame& frame){
     return writeDump(filename, frame, {}, nullptr, {});
 }

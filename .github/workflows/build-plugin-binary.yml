@@ -293,7 +293,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .wasm-build/_deps
-          key: wasm-fetch-v2-${{ hashFiles('coretoolkit/cmake/wasm/CMakeLists.txt') }}
+          key: wasm-fetch-v4-${{ hashFiles('coretoolkit/cmake/wasm/CMakeLists.txt') }}
 
       - name: Build wasm plugin
         id: build

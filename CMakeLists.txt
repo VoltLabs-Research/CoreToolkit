@@ -51,7 +51,9 @@ option(VOLT_ENABLE_NATIVE_OPTIMIZATIONS "Tune for the build machine's exact CPU 
 set(VOLT_BASELINE_ARCH "x86-64-v3" CACHE STRING
 	"Baseline -march for Release builds (x86-64, x86-64-v2, x86-64-v3, x86-64-v4)")
 
-if(VOLT_ENABLE_NATIVE_OPTIMIZATIONS)
+if(EMSCRIPTEN OR VOLT_BASELINE_ARCH STREQUAL "off")
+	set(VOLT_RELEASE_ARCH_FLAGS)
+elseif(VOLT_ENABLE_NATIVE_OPTIMIZATIONS)
 	set(VOLT_RELEASE_ARCH_FLAGS -march=native)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
 	set(VOLT_RELEASE_ARCH_FLAGS -march=${VOLT_BASELINE_ARCH})
@@ -64,14 +66,35 @@ endif()
 set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
 set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release MinSizeRel RelWithDebInfo)
 
+if(EMSCRIPTEN)
+	set(VOLT_PLATFORM_WASM ON)
+	add_compile_definitions(VOLT_PLATFORM_WASM=1)
+endif()
+
 # External packages
-find_package(Threads REQUIRED)
-find_package(TBB REQUIRED)
-find_package(spdlog REQUIRED)
-find_package(nlohmann_json REQUIRED)
-find_package(Boost REQUIRED)
-find_package(duckdb REQUIRED)
-find_package(lammpsio REQUIRED)
+if(NOT TARGET Threads::Threads)
+	find_package(Threads REQUIRED)
+endif()
+if(NOT EMSCRIPTEN)
+	if(NOT TARGET TBB::tbb)
+		find_package(TBB REQUIRED)
+	endif()
+	if(NOT TARGET duckdb::duckdb)
+		find_package(duckdb REQUIRED)
+	endif()
+endif()
+if(NOT TARGET spdlog::spdlog)
+	find_package(spdlog REQUIRED)
+endif()
+if(NOT TARGET nlohmann_json::nlohmann_json)
+	find_package(nlohmann_json REQUIRED)
+endif()
+if(NOT TARGET Boost::headers AND NOT TARGET Boost::boost AND NOT TARGET boost::headers AND NOT TARGET boost::boost)
+	find_package(Boost REQUIRED)
+endif()
+if(NOT TARGET lammpsio::lammpsio)
+	find_package(lammpsio REQUIRED)
+endif()
 
 set(VOLT_BOOST_TARGET "")
 if(TARGET Boost::headers)
@@ -85,19 +108,19 @@ elseif(TARGET boost::boost)
 endif()
 
 # MWM_CSP library (for centrosymmetry matching)
-file(GLOB MWM_CSP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/*.cpp)
+file(GLOB MWM_CSP_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/mwm_csp/*.cpp)
 add_library(mwm_csp STATIC ${MWM_CSP_SOURCES})
-target_include_directories(mwm_csp PUBLIC ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp)
+target_include_directories(mwm_csp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/mwm_csp)
 
 # Geogram (Delaunay tessellation)
-set(GEOGRAM_SOURCES ${CMAKE_SOURCE_DIR}/dependencies/geogram/Delaunay_psm.cpp)
+set(GEOGRAM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/geogram/Delaunay_psm.cpp)
 add_library(geogram STATIC ${GEOGRAM_SOURCES})
 # Delaunay_psm.h defaults to DLL import/export unless GEO_STATIC_LIBS is set.
 # We build geogram as a static library, and MSVC rejects definitions marked
 # as dllimport (for example Periodic::reorder_instances).
 target_compile_definitions(geogram PUBLIC GEO_STATIC_LIBS)
 target_include_directories(geogram PUBLIC
-	${CMAKE_SOURCE_DIR}/dependencies/geogram
+	${CMAKE_CURRENT_SOURCE_DIR}/dependencies/geogram
 	${Boost_INCLUDE_DIRS}
 )
 if(VOLT_BOOST_TARGET)
@@ -125,6 +148,9 @@ target_compile_options(geogram PRIVATE -frounding-math -ffp-contract=off)
 # 8 cores/16 threads). See DelaunayTessellation::generateTessellation for the
 # runtime thread cap.
 option(VOLT_ENABLE_PARALLEL_DELAUNAY "Build geogram's ParallelDelaunay3d (PDEL) backend" ON)
+if(EMSCRIPTEN)
+	set(VOLT_ENABLE_PARALLEL_DELAUNAY OFF CACHE BOOL "PDEL requires OpenMP; disabled for wasm" FORCE)
+endif()
 if(VOLT_ENABLE_PARALLEL_DELAUNAY)
 	find_package(OpenMP)
 	if(OpenMP_CXX_FOUND)
@@ -138,57 +164,65 @@ if(VOLT_ENABLE_PARALLEL_DELAUNAY)
 	endif()
 endif()
 
-file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE LIBRARY_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 add_library(${PROJECT_NAME} STATIC ${LIBRARY_SOURCES})
 target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
 target_include_directories(${PROJECT_NAME} PUBLIC
-	${CMAKE_SOURCE_DIR}/include
-	${CMAKE_SOURCE_DIR}/dependencies
+	${CMAKE_CURRENT_SOURCE_DIR}/include
+	${CMAKE_CURRENT_SOURCE_DIR}/dependencies
 	${Boost_INCLUDE_DIRS}
-	${CMAKE_SOURCE_DIR}/dependencies/fast_float
-	${CMAKE_SOURCE_DIR}/dependencies/mwm_csp
-	${CMAKE_SOURCE_DIR}/dependencies/geogram
+	${CMAKE_CURRENT_SOURCE_DIR}/dependencies/fast_float
+	${CMAKE_CURRENT_SOURCE_DIR}/dependencies/mwm_csp
+	${CMAKE_CURRENT_SOURCE_DIR}/dependencies/geogram
 )
+if(EMSCRIPTEN)
+	target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/compat/wasm)
+	target_compile_definitions(${PROJECT_NAME} PUBLIC VOLT_PLATFORM_WASM=1)
+endif()
 
-target_link_libraries(${PROJECT_NAME} PUBLIC
+set(_CORETOOLKIT_LINK
 	Threads::Threads
-	TBB::tbb
 	spdlog::spdlog
 	nlohmann_json::nlohmann_json
 	${VOLT_BOOST_TARGET}
-	duckdb::duckdb
 	lammpsio::lammpsio
 	mwm_csp
 	geogram
 )
+if(NOT EMSCRIPTEN)
+	list(APPEND _CORETOOLKIT_LINK TBB::tbb duckdb::duckdb)
+endif()
+target_link_libraries(${PROJECT_NAME} PUBLIC ${_CORETOOLKIT_LINK})
 
 # Install main library and embedded libs
 install(TARGETS ${PROJECT_NAME} mwm_csp geogram DESTINATION lib)
 
-# volt-dump-transform — daemon-side LAMMPS dump mutator (slice / select / merge).
-# Links the coretoolkit target so it inherits the LAMMPS parser, the expression
-# engine and duckdb (Parquet reader) transitively.
-add_executable(volt-dump-transform tools/dump_transform.cpp)
-target_link_libraries(volt-dump-transform PRIVATE ${PROJECT_NAME})
-# The daemon ships this binary inside its container and runs it on whatever Linux
-# the user enrolled (the dev daemon runs in an Ubuntu 24.04 / glibc 2.39 image).
-# Two portability hazards: (1) a binary built against a newer host glibc fails to
-# load with `GLIBC_x.yy not found` — fixed by BUILDING the binary in a glibc-2.39
-# image (see tools/build-dump-transform.sh, which compiles inside ubuntu:24.04);
-# (2) libstdc++/libgcc version skew — fixed by linking those statically. oneTBB
-# (conan) is shared-only so the binary keeps a libtbb.so.12 dependency, which the
-# daemon image satisfies (TBB is an apt/runtime lib); RPATH $ORIGIN lets a
-# co-located libtbb.so.12 win if present.
-if(UNIX AND NOT APPLE)
-    target_link_options(volt-dump-transform PRIVATE
-        -static-libstdc++ -static-libgcc
-        "LINKER:-rpath,$ORIGIN")
+if(NOT EMSCRIPTEN)
+	# volt-dump-transform — daemon-side LAMMPS dump mutator (slice / select / merge).
+	# Links the coretoolkit target so it inherits the LAMMPS parser, the expression
+	# engine and duckdb (Parquet reader) transitively.
+	add_executable(volt-dump-transform tools/dump_transform.cpp)
+	target_link_libraries(volt-dump-transform PRIVATE ${PROJECT_NAME})
+	# The daemon ships this binary inside its container and runs it on whatever Linux
+	# the user enrolled (the dev daemon runs in an Ubuntu 24.04 / glibc 2.39 image).
+	# Two portability hazards: (1) a binary built against a newer host glibc fails to
+	# load with `GLIBC_x.yy not found` — fixed by BUILDING the binary in a glibc-2.39
+	# image (see tools/build-dump-transform.sh, which compiles inside ubuntu:24.04);
+	# (2) libstdc++/libgcc version skew — fixed by linking those statically. oneTBB
+	# (conan) is shared-only so the binary keeps a libtbb.so.12 dependency, which the
+	# daemon image satisfies (TBB is an apt/runtime lib); RPATH $ORIGIN lets a
+	# co-located libtbb.so.12 win if present.
+	if(UNIX AND NOT APPLE)
+	    target_link_options(volt-dump-transform PRIVATE
+	        -static-libstdc++ -static-libgcc
+	        "LINKER:-rpath,$ORIGIN")
+	endif()
+	if(APPLE)
+	    target_link_options(volt-dump-transform PRIVATE "LINKER:-rpath,@loader_path")
+	endif()
+	install(TARGETS volt-dump-transform DESTINATION bin)
 endif()
-if(APPLE)
-    target_link_options(volt-dump-transform PRIVATE "LINKER:-rpath,@loader_path")
-endif()
-install(TARGETS volt-dump-transform DESTINATION bin)
 
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC).
 # VOLT_RELEASE_ARCH_FLAGS is set once near the top of this file.
@@ -198,10 +232,13 @@ target_compile_options(${PROJECT_NAME} PUBLIC
 	>
 )
 # Keep strict IEEE on geometry-critical code — NOT using -ffast-math globally
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION include)
 
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/mwm_csp/ DESTINATION include FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/geogram/ DESTINATION include FILES_MATCHING PATTERN "*.h")
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/dependencies/fast_float/ DESTINATION include FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/mwm_csp/ DESTINATION include FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/geogram/ DESTINATION include FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/fast_float/ DESTINATION include FILES_MATCHING PATTERN "*.h")
+if(EMSCRIPTEN)
+	install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/compat/wasm/ DESTINATION include)
+endif()
 
-install(FILES ${CMAKE_SOURCE_DIR}/cmake/VoltPlugin.cmake DESTINATION lib/cmake/coretoolkit)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VoltPlugin.cmake DESTINATION lib/cmake/coretoolkit)

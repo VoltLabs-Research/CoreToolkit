@@ -144,6 +144,7 @@ public:
     }
 
     bool parseFile(const std::string &filename, Frame &frame);
+    bool parseBuffer(const char* data, std::size_t size, Frame &frame);
     bool writeFile(const std::string& filename, const Frame& frame);
     bool writeFileWithExtraColumns(
         const std::string& filename,

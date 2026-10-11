@@ -231,9 +231,158 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  build-wasm:
+    name: Build (wasm-wasm32)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      plugin_key: ${{ steps.bundle.outputs.plugin_key }}
+      plugin_version: ${{ steps.bundle.outputs.plugin_version }}
+    steps:
+      - name: Check out plugin repository
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Check out CoreToolkit
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/CoreToolkit
+          ref: ${{ inputs.coretoolkit_ref }}
+          path: coretoolkit
+
+      - name: Check out LammpsIO
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/LammpsIO
+          ref: ${{ inputs.lammpsio_ref }}
+          path: lammpsio
+
+      - name: Check out sibling plugin repositories
+        if: inputs.dependency_repos != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r dependency_repo; do
+            dependency_repo="$(printf '%s' "$dependency_repo" | xargs)"
+            [[ -z "$dependency_repo" ]] && continue
+            git clone --depth 1 "https://github.com/${GITHUB_REPOSITORY_OWNER}/${dependency_repo}" "$(basename "$dependency_repo")"
+          done <<'EOF'
+          ${{ inputs.dependency_repos }}
+          EOF
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bundle tools
+        run: python -m pip install --upgrade pip zstandard
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: .wasm-build/_deps
+          key: wasm-fetch-${{ hashFiles('coretoolkit/cmake/wasm/CMakeLists.txt') }}
+          restore-keys: |
+            wasm-fetch-
+
+      - name: Build wasm plugin
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin_dir="$PWD/plugin"
+          install_dir="$PWD/.ci-install-wasm"
+          build_dir="$PWD/.wasm-build"
+          mkdir -p "$install_dir" "$build_dir"
+
+          dep_dirs=()
+          if [[ -n '${{ inputs.dependency_repos }}' ]]; then
+            while IFS= read -r dependency_repo; do
+              dependency_repo="$(printf '%s' "$dependency_repo" | xargs)"
+              [[ -z "$dependency_repo" ]] && continue
+              dep_dirs+=("$PWD/$(basename "$dependency_repo")")
+            done <<'EOF'
+          ${{ inputs.dependency_repos }}
+          EOF
+          fi
+
+          dep_joined=""
+          if ((${#dep_dirs[@]})); then
+            IFS=';'
+            dep_joined="${dep_dirs[*]}"
+            unset IFS
+          fi
+
+          emcmake cmake -S "$PWD/coretoolkit/cmake/wasm" -B "$build_dir" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$install_dir" \
+            -DVOLT_PLUGIN_SOURCE="$plugin_dir" \
+            -DVOLT_CORETOOLKIT_SOURCE="$PWD/coretoolkit" \
+            -DVOLT_LAMMPSIO_SOURCE="$PWD/lammpsio" \
+            -DVOLT_DEPENDENCY_DIRS="$dep_joined" \
+            -DVOLT_ENABLE_PARALLEL_DELAUNAY=OFF \
+            -DVOLT_BASELINE_ARCH=off \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build "$build_dir" --config Release --parallel
+          cmake --install "$build_dir" --config Release
+
+          echo "install_dir=$install_dir" >> "$GITHUB_OUTPUT"
+          echo "plugin_dir=$plugin_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Bundle plugin
+        id: bundle
+        shell: bash
+        env:
+          PLUGIN_DIR: ${{ steps.build.outputs.plugin_dir }}
+          INSTALL_DIR: ${{ steps.build.outputs.install_dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python3 "$GITHUB_WORKSPACE/coretoolkit/.github/scripts/build_plugin_bundle.py" \
+            --plugin-dir "$PLUGIN_DIR" \
+            --install-dir "$INSTALL_DIR" \
+            --os wasm \
+            --arch wasm32 \
+            --output-dir "$PWD/artifacts"
+
+      - name: Smoke --describe
+        if: steps.bundle.outputs.plugin_key != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          js_file="$(find .ci-install-wasm -name '*.js' | head -n 1)"
+          if [[ -z "$js_file" ]]; then
+            echo '::error::no wasm glue JS installed' >&2
+            exit 1
+          fi
+          node "$js_file" --describe | python3 -c 'import json,sys; json.load(sys.stdin)'
+
+      - name: Upload bundle artifact
+        if: steps.bundle.outputs.plugin_key != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-wasm-wasm32
+          path: artifacts/*
+          retention-days: 7
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-wasm]
     if: needs.build.outputs.plugin_key != '' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -256,7 +405,7 @@ jobs:
 
   publish:
     name: Publish to registry
-    needs: build
+    needs: [build, build-wasm]
     if: needs.build.outputs.plugin_key != '' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -288,7 +437,12 @@ jobs:
           VPM_NO_KEYRING: '1'
           VPM_PUBLISH_TOKEN: ${{ secrets.VPM_PUBLISH_TOKEN }}
         run: |
+          extra=()
+          if ls artifacts/*-wasm-wasm32.tar.zst >/dev/null 2>&1; then
+            extra+=(--bundle wasm-wasm32=$(ls artifacts/*-wasm-wasm32.tar.zst))
+          fi
           vpm publish plugin --token "$VPM_PUBLISH_TOKEN" \
             --bundle linux-x86_64=$(ls artifacts/*-linux-x86_64.tar.zst) \
             --bundle darwin-arm64=$(ls artifacts/*-darwin-arm64.tar.zst) \
-            --bundle windows-x86_64=$(ls artifacts/*-windows-x86_64.tar.zst)
+            --bundle windows-x86_64=$(ls artifacts/*-windows-x86_64.tar.zst) \
+            "${extra[@]}"

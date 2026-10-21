@@ -99,7 +99,9 @@ def main() -> int:
 
     install_lib = install_dir / "lib"
     if install_lib.is_dir():
-        shutil.copytree(install_lib, staging / "lib", dirs_exist_ok=True)
+        # What the program loads at run time: not the static archives and CMake packages it was
+        # linked from.
+        shutil.copytree(install_lib, staging / "lib", dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.a", "cmake"))
 
     runtime_files = _collect_runtime_files(plugin_dir, args.os_slug)
     if runtime_files:

@@ -70,32 +70,16 @@ def main() -> int:
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
 
-    if args.os_slug == "wasm":
-        js_src = _find_binary(install_dir, f"{binary_name}.js")
-        wasm_src = _find_binary(install_dir, f"{binary_name}.wasm")
-        if js_src is None or wasm_src is None:
-            print(
-                f"::error::wasm module {binary_name}.js/.wasm not found under {install_dir}",
-                file=sys.stderr,
-            )
-            for path in install_dir.rglob("*"):
-                if path.is_file():
-                    print(f"  {path.relative_to(install_dir)}", file=sys.stderr)
-            return 1
-        (staging / "bin").mkdir()
-        shutil.copy2(js_src, staging / "bin" / f"{binary_name}.js")
-        shutil.copy2(wasm_src, staging / "bin" / f"{binary_name}.wasm")
-    else:
-        binary_filename = f"{binary_name}.exe" if args.os_slug == "windows" else binary_name
-        bin_src = _find_binary(install_dir, binary_filename)
-        if bin_src is None:
-            print(f"::error::binary {binary_filename!r} not found under {install_dir}", file=sys.stderr)
-            for path in install_dir.rglob("*"):
-                if path.is_file():
-                    print(f"  {path.relative_to(install_dir)}", file=sys.stderr)
-            return 1
-        (staging / "bin").mkdir()
-        shutil.copy2(bin_src, staging / "bin" / binary_filename)
+    binary_filename = f"{binary_name}.exe" if args.os_slug == "windows" else binary_name
+    bin_src = _find_binary(install_dir, binary_filename)
+    if bin_src is None:
+        print(f"::error::binary {binary_filename!r} not found under {install_dir}", file=sys.stderr)
+        for path in install_dir.rglob("*"):
+            if path.is_file():
+                print(f"  {path.relative_to(install_dir)}", file=sys.stderr)
+        return 1
+    (staging / "bin").mkdir()
+    shutil.copy2(bin_src, staging / "bin" / binary_filename)
 
     install_lib = install_dir / "lib"
     if install_lib.is_dir():
@@ -162,7 +146,7 @@ def _find_binary(install_dir: Path, filename: str) -> Path | None:
     for candidate in install_dir.rglob(filename):
         if not candidate.is_file():
             continue
-        if filename.endswith((".js", ".wasm")) or os.access(candidate, os.X_OK):
+        if os.access(candidate, os.X_OK):
             return candidate
     return None
 

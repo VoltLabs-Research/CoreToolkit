@@ -362,12 +362,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          js_file="$(find .ci-install-wasm -name '*.js' | head -n 1)"
-          if [[ -z "$js_file" ]]; then
-            echo '::error::no wasm glue JS installed' >&2
-            exit 1
-          fi
-          node "$js_file" --describe | python3 -c 'import json,sys; json.load(sys.stdin)'
+          mkdir -p smoke && tar --zstd -xf artifacts/*-wasm-wasm32.tar.zst -C smoke
+          program="$(find smoke/bin -type f ! -name '*.wasm' | head -n 1)"
+          # The program is a Node program that queries the DuckDB of the machine it runs on: the
+          # global npm package VOLT's browser runtime installs (@volt/web-runtime pins its version).
+          npm install --no-save --prefix "$RUNNER_TEMP/global" @duckdb/duckdb-wasm@1.32.0
+          NODE_PATH="$RUNNER_TEMP/global/node_modules" "$program" --describe | python3 -c 'import json,sys; json.load(sys.stdin)'
 
       - name: Upload bundle artifact
         if: steps.bundle.outputs.plugin_key != ''

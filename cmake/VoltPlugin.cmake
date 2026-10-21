@@ -1,3 +1,32 @@
+# The shell and libraries of a program's WebAssembly build (compat/wasm).
+set(VOLT_WASM_COMPAT_DIR "${CMAKE_CURRENT_LIST_DIR}/../compat/wasm")
+
+# A WebAssembly build of an executable is a Node program: bin/<name> runs as `node bin/<name>` or as
+# an executable, with the process's files and standard streams, its exit status, and the DuckDB of
+# the machine it runs on (compat/wasm/duckdb-host.js). Its module is inside it, so that it is one file
+# as a native executable is: the daemon stores, downloads and runs a plugin as its one binary.
+function(volt_wasm_program TARGET_NAME)
+    set(_shell
+        "${VOLT_WASM_COMPAT_DIR}/duckdb-host.js"
+        "${VOLT_WASM_COMPAT_DIR}/node-program.pre.js"
+        "${VOLT_WASM_COMPAT_DIR}/node-program.shebang.js")
+    set_target_properties(${TARGET_NAME} PROPERTIES SUFFIX "")
+    set_property(TARGET ${TARGET_NAME} APPEND PROPERTY LINK_DEPENDS ${_shell})
+    target_compile_options(${TARGET_NAME} PRIVATE -fexceptions)
+    target_link_options(${TARGET_NAME} PRIVATE
+        "SHELL:-sENVIRONMENT=node"
+        "SHELL:-sNODERAWFS=1"
+        "SHELL:-sEXIT_RUNTIME=1"
+        "SHELL:-sALLOW_MEMORY_GROWTH=1"
+        "SHELL:-sMAXIMUM_MEMORY=4GB"
+        "SHELL:-sDISABLE_EXCEPTION_CATCHING=0"
+        "SHELL:-sSINGLE_FILE=1"
+        "SHELL:--js-library ${VOLT_WASM_COMPAT_DIR}/duckdb-host.js"
+        "SHELL:--pre-js ${VOLT_WASM_COMPAT_DIR}/node-program.pre.js"
+        "SHELL:--extern-pre-js ${VOLT_WASM_COMPAT_DIR}/node-program.shebang.js"
+    )
+endfunction()
+
 function(volt_pin_tbbmalloc TARGET_NAME)
     if(NOT UNIX OR APPLE OR NOT TARGET TBB::tbbmalloc)
         return()
@@ -178,24 +207,9 @@ function(volt_add_plugin PLUGIN_NAME)
                 target_link_libraries(${PLUGIN_NAME} PRIVATE TBB::tbb)
                 volt_pin_tbbmalloc(${PLUGIN_NAME})
             else()
-                set_target_properties(${PLUGIN_NAME} PROPERTIES SUFFIX ".js")
-                target_compile_options(${PLUGIN_NAME} PRIVATE -fexceptions)
-                target_link_options(${PLUGIN_NAME} PRIVATE
-                    "SHELL:-sALLOW_MEMORY_GROWTH=1"
-                    "SHELL:-sMAXIMUM_MEMORY=4GB"
-                    "SHELL:-sEXIT_RUNTIME=0"
-                    "SHELL:-sMODULARIZE=0"
-                    "SHELL:-sENVIRONMENT=web,node"
-                    "SHELL:-sFORCE_FILESYSTEM=1"
-                    "SHELL:-sDISABLE_EXCEPTION_CATCHING=0"
-                    "SHELL:-sEXPORTED_RUNTIME_METHODS=['callMain','FS']"
-                )
+                volt_wasm_program(${PLUGIN_NAME})
             endif()
             install(TARGETS ${PLUGIN_NAME} DESTINATION bin)
-            if(EMSCRIPTEN)
-                install(FILES "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/${PLUGIN_NAME}.wasm"
-                    DESTINATION bin OPTIONAL)
-            endif()
         endif()
     endif()
 

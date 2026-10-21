@@ -1,20 +1,32 @@
 #pragma once
 
+// The DuckDB C++ API a WebAssembly build compiles against: a client of the DuckDB the program runs
+// with, duckdb-wasm's Node build (duckdb-host.js), which executes every query. Results come back to
+// the classes below, which hold them as the real API's do.
+
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
+
+extern "C" {
+int volt_duckdb_open();
+void volt_duckdb_close(int database);
+int volt_duckdb_connect(int database);
+void volt_duckdb_disconnect(int connection);
+char* volt_duckdb_query(int connection, const char* sql);
+char* volt_duckdb_append(int connection, const char* table, const char* csv, std::size_t length);
+}
 
 namespace duckdb {
 
@@ -83,16 +95,21 @@ public:
         std::string upper;
         upper.reserve(sql.size());
         for(char c : sql) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-        if(upper == "DOUBLE[][]") return LIST(LIST(DOUBLE));
-        if(upper == "DOUBLE[]") return LIST(DOUBLE);
-        if(upper == "DOUBLE") return DOUBLE;
-        if(upper == "FLOAT") return LogicalType(LogicalTypeId::FLOAT);
-        if(upper == "BIGINT") return BIGINT;
-        if(upper == "INTEGER" || upper == "INT") return LogicalType(LogicalTypeId::INTEGER);
-        if(upper == "UINTEGER") return LogicalType(LogicalTypeId::UINTEGER);
-        if(upper == "UBIGINT") return LogicalType(LogicalTypeId::UBIGINT);
-        if(upper == "VARCHAR") return VARCHAR;
-        if(upper == "BOOLEAN") return LogicalType(LogicalTypeId::BOOLEAN);
+        if(upper.size() > 2 && upper.compare(upper.size() - 2, 2, "[]") == 0) {
+            return LIST(fromSql(upper.substr(0, upper.size() - 2)));
+        }
+        static const std::pair<const char*, LogicalTypeId> names[] = {
+            {"TINYINT", LogicalTypeId::TINYINT}, {"SMALLINT", LogicalTypeId::SMALLINT},
+            {"INTEGER", LogicalTypeId::INTEGER}, {"INT", LogicalTypeId::INTEGER}, {"BIGINT", LogicalTypeId::BIGINT},
+            {"HUGEINT", LogicalTypeId::HUGEINT}, {"UTINYINT", LogicalTypeId::UTINYINT},
+            {"USMALLINT", LogicalTypeId::USMALLINT}, {"UINTEGER", LogicalTypeId::UINTEGER},
+            {"UBIGINT", LogicalTypeId::UBIGINT}, {"UHUGEINT", LogicalTypeId::UHUGEINT},
+            {"FLOAT", LogicalTypeId::FLOAT}, {"DOUBLE", LogicalTypeId::DOUBLE}, {"DECIMAL", LogicalTypeId::DECIMAL},
+            {"BOOLEAN", LogicalTypeId::BOOLEAN}, {"VARCHAR", LogicalTypeId::VARCHAR}
+        };
+        for(const auto& [name, id] : names){
+            if(upper == name) return LogicalType(id);
+        }
         return VARCHAR;
     }
 
@@ -139,6 +156,18 @@ public:
     }
 
     bool isNull() const { return isNull_; }
+    bool IsNull() const { return isNull_; }
+
+    template<typename T>
+    T GetValue() const {
+        if constexpr(std::is_same_v<T, std::string>) {
+            return ToString();
+        } else if constexpr(std::is_floating_point_v<T>) {
+            return static_cast<T>(isInteger() ? static_cast<double>(int64_) : double_);
+        } else {
+            return static_cast<T>(isInteger() ? int64_ : static_cast<std::int64_t>(double_));
+        }
+    }
     const LogicalType& type() const { return type_; }
     double asDouble() const { return double_; }
     std::int64_t asInt64() const { return int64_; }
@@ -179,6 +208,8 @@ public:
         }
     }
 
+    // A value of a query result (duckdb-host.js): integers beyond 2^53 and the doubles JSON has no
+    // literal for arrive as strings.
     static Value fromJson(const nlohmann::json& json, const LogicalType& type) {
         if(json.is_null()) return Value(type);
         if(type.id() == LogicalTypeId::LIST) {
@@ -192,15 +223,27 @@ public:
             return Value(json.is_string() ? json.get<std::string>() : json.dump());
         }
         if(type.id() == LogicalTypeId::DOUBLE || type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DECIMAL) {
-            return DOUBLE(json.get<double>());
+            return DOUBLE(json.is_string() ? std::strtod(json.get<std::string>().c_str(), nullptr) : json.get<double>());
         }
         Value out;
         out.type_ = type;
-        out.int64_ = json.get<std::int64_t>();
+        if(json.is_boolean()) {
+            out.int64_ = json.get<bool>() ? 1 : 0;
+        } else if(json.is_string()) {
+            const auto text = json.get<std::string>();
+            out.int64_ = static_cast<std::int64_t>(text.front() == '-' ? std::strtoll(text.c_str(), nullptr, 10) : static_cast<std::int64_t>(std::strtoull(text.c_str(), nullptr, 10)));
+        } else {
+            out.int64_ = json.is_number_float() ? static_cast<std::int64_t>(json.get<double>()) : json.get<std::int64_t>();
+        }
         return out;
     }
 
 private:
+    bool isInteger() const {
+        const auto id = type_.id();
+        return id != LogicalTypeId::DOUBLE && id != LogicalTypeId::FLOAT && id != LogicalTypeId::DECIMAL;
+    }
+
     LogicalType type_ = LogicalType::DOUBLE;
     bool isNull_ = false;
     double double_ = 0.0;
@@ -417,19 +460,6 @@ private:
     std::vector<Vector> columns_;
 };
 
-struct Table {
-    std::vector<std::string> names;
-    std::vector<LogicalType> types;
-    std::vector<std::vector<Value>> rows;
-};
-
-class Connection;
-
-class DuckDB {
-public:
-    explicit DuckDB(const char* = nullptr, struct DBConfig* = nullptr) {}
-    std::unordered_map<std::string, Table> tables;
-};
 
 struct DBConfig {
     struct Options {
@@ -438,281 +468,196 @@ struct DBConfig {
     } options;
 };
 
-class Appender {
+// An in-memory database of the engine's own, dropped with the object.
+class DuckDB {
 public:
-    Appender(Connection& connection, std::string tableName);
+    explicit DuckDB(const char* = nullptr, DBConfig* = nullptr) : id_(volt_duckdb_open()) {}
+    ~DuckDB() { volt_duckdb_close(id_); }
+    DuckDB(const DuckDB&) = delete;
+    DuckDB& operator=(const DuckDB&) = delete;
 
-    void BeginRow() { current_.clear(); }
-    void EndRow();
-    void Close() {}
-
-    template<typename T>
-    void Append(T value) {
-        current_.push_back(makeValue(value));
-    }
-
-    void Append(const Value& value) { current_.push_back(value); }
+    int id() const { return id_; }
 
 private:
-    template<typename T>
-    Value makeValue(T value) {
-        if constexpr(std::is_same_v<T, double> || std::is_same_v<T, float>) {
-            return Value::DOUBLE(static_cast<double>(value));
-        } else {
-            Value out = Value::BIGINT(static_cast<std::int64_t>(value));
-            return out;
-        }
-    }
-
-    DuckDB* db_ = nullptr;
-    std::string tableName_;
-    std::vector<Value> current_;
+    int id_;
 };
 
-class Connection {
-public:
-    explicit Connection(DuckDB& db) : db_(&db) {}
+namespace detail {
 
-    std::unique_ptr<QueryResult> Query(const std::string& sql);
-
-    DuckDB* db() { return db_; }
-
-private:
-    DuckDB* db_;
-};
-
-inline std::string unquoteIdent(std::string text) {
-    while(!text.empty() && (text.front() == ' ' || text.front() == '\n' || text.front() == '\t')) text.erase(text.begin());
-    while(!text.empty() && (text.back() == ' ' || text.back() == '\n' || text.back() == '\t')) text.pop_back();
-    if(text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-        return text.substr(1, text.size() - 2);
+// Takes the engine's reply (a JSON document it allocated) into a result.
+inline std::unique_ptr<QueryResult> takeReply(char* reply) {
+    auto result = std::make_unique<QueryResult>();
+    const nlohmann::json document = nlohmann::json::parse(reply);
+    std::free(reply);
+    if(document.contains("error")) {
+        result->fail(document["error"].get<std::string>());
+        return result;
     }
-    return text;
-}
-
-inline bool parseCreateTable(const std::string& sql, Table& table, std::string& error) {
-    const auto open = sql.find('(');
-    const auto close = sql.rfind(')');
-    if(open == std::string::npos || close == std::string::npos || close <= open) {
-        error = "invalid CREATE TABLE";
-        return false;
-    }
-    const std::string header = sql.substr(0, open);
-    const auto namePos = header.find_last_of(" \t");
-    table.names.clear();
-    table.types.clear();
-    table.rows.clear();
-    if(namePos == std::string::npos) {
-        error = "missing table name";
-        return false;
-    }
-
-    std::string body = sql.substr(open + 1, close - open - 1);
-    std::string column;
-    int depth = 0;
-    auto flush = [&]() {
-        if(column.empty()) return;
-        std::string name;
-        std::string type;
-        bool inQuotes = false;
-        std::size_t split = std::string::npos;
-        for(std::size_t i = 0; i < column.size(); ++i){
-            if(column[i] == '"') inQuotes = !inQuotes;
-            if(!inQuotes && column[i] == ' ') {
-                split = i;
-                break;
-            }
-        }
-        if(split == std::string::npos) {
-            name = unquoteIdent(column);
-            type = "VARCHAR";
-        } else {
-            name = unquoteIdent(column.substr(0, split));
-            type = column.substr(split + 1);
-        }
-        table.names.push_back(name);
-        table.types.push_back(LogicalType::fromSql(type));
-        column.clear();
-    };
-    for(char c : body){
-        if(c == '(') ++depth;
-        if(c == ')') --depth;
-        if(c == ',' && depth == 0) {
-            flush();
-            continue;
-        }
-        column.push_back(c);
-    }
-    flush();
-    return !table.names.empty();
-}
-
-inline std::string extractQuoted(const std::string& sql) {
-    const auto first = sql.find('\'');
-    const auto last = sql.rfind('\'');
-    if(first == std::string::npos || last == std::string::npos || last <= first) return {};
-    std::string out;
-    for(std::size_t i = first + 1; i < last; ++i){
-        if(sql[i] == '\'' && i + 1 < last && sql[i + 1] == '\'') {
-            out.push_back('\'');
-            ++i;
-        } else {
-            out.push_back(sql[i]);
-        }
-    }
-    return out;
-}
-
-inline bool writeTableJson(const Table& table, const std::string& path, std::string& error) {
-    nlohmann::json document;
-    document["columns"] = nlohmann::json::array();
-    for(std::size_t i = 0; i < table.names.size(); ++i){
-        document["columns"].push_back({
-            {"name", table.names[i]},
-            {"type", table.types[i].ToString()}
-        });
-    }
-    document["rows"] = nlohmann::json::array();
-    for(const auto& row : table.rows){
-        nlohmann::json jsonRow = nlohmann::json::array();
-        for(const auto& value : row) jsonRow.push_back(value.toJson());
-        document["rows"].push_back(std::move(jsonRow));
-    }
-    std::ofstream out(path);
-    if(!out) {
-        error = "failed to open " + path;
-        return false;
-    }
-    out << document.dump();
-    return static_cast<bool>(out);
-}
-
-inline bool readTableJson(const std::string& path, Table& table, std::string& error) {
-    std::ifstream in(path);
-    if(!in) {
-        error = "failed to open " + path;
-        return false;
-    }
-    nlohmann::json document;
-    try {
-        in >> document;
-    } catch(const std::exception& exception) {
-        error = exception.what();
-        return false;
-    }
-    table.names.clear();
-    table.types.clear();
-    table.rows.clear();
+    std::vector<std::string> names;
+    std::vector<LogicalType> types;
     for(const auto& column : document["columns"]){
-        table.names.push_back(column.at("name").get<std::string>());
-        table.types.push_back(LogicalType::fromSql(column.at("type").get<std::string>()));
+        names.push_back(column["name"].get<std::string>());
+        types.push_back(LogicalType::fromSql(column["type"].get<std::string>()));
     }
+    std::vector<std::vector<Value>> rows;
+    rows.reserve(document["rows"].size());
     for(const auto& jsonRow : document["rows"]){
         std::vector<Value> row;
-        row.reserve(table.names.size());
-        for(std::size_t i = 0; i < table.names.size(); ++i){
-            row.push_back(Value::fromJson(jsonRow.at(i), table.types[i]));
-        }
-        table.rows.push_back(std::move(row));
+        row.reserve(types.size());
+        for(std::size_t i = 0; i < types.size(); ++i) row.push_back(Value::fromJson(jsonRow.at(i), types[i]));
+        rows.push_back(std::move(row));
     }
-    return true;
-}
-
-inline std::unique_ptr<QueryResult> Connection::Query(const std::string& sql) {
-    auto result = std::make_unique<QueryResult>();
-    std::string error;
-
-    const auto startsWith = [&](const char* prefix) {
-        return sql.rfind(prefix, 0) == 0 || sql.find(prefix) != std::string::npos;
-    };
-
-    if(sql.find("CREATE TABLE") != std::string::npos) {
-        Table table;
-        if(!parseCreateTable(sql, table, error)) {
-            result->fail(error);
-            return result;
-        }
-        const auto open = sql.find('(');
-        std::string header = sql.substr(0, open);
-        const auto namePos = header.find_last_of(" \t");
-        const std::string name = unquoteIdent(header.substr(namePos + 1));
-        db_->tables[name] = std::move(table);
-        return result;
-    }
-
-    if(sql.find("COPY ") != std::string::npos) {
-        const auto toPos = sql.find(" TO ");
-        if(toPos == std::string::npos) {
-            result->fail("invalid COPY");
-            return result;
-        }
-        std::string name = unquoteIdent(sql.substr(5, toPos - 5));
-        const std::string path = extractQuoted(sql);
-        auto it = db_->tables.find(name);
-        if(it == db_->tables.end()) {
-            result->fail("unknown table " + name);
-            return result;
-        }
-        if(!writeTableJson(it->second, path, error)) result->fail(error);
-        return result;
-    }
-
-    if(sql.find("read_parquet") != std::string::npos) {
-        Table table;
-        const std::string path = extractQuoted(sql);
-        if(!readTableJson(path, table, error)) {
-            result->fail(error);
-            return result;
-        }
-        result->setColumns(table.names, table.types, table.rows);
-        return result;
-    }
-
-    result->fail("unsupported SQL in wasm duckdb shim");
+    result->setColumns(std::move(names), std::move(types), std::move(rows));
     return result;
 }
 
-inline Appender::Appender(Connection& connection, std::string tableName)
-    : db_(connection.db()), tableName_(std::move(tableName)) {}
+}
 
-inline Value coerceValue(Value value, const LogicalType& type) {
-    if(value.isNull()) return Value(type);
-    switch(type.id()){
-        case LogicalTypeId::DOUBLE:
-        case LogicalTypeId::FLOAT:
-        case LogicalTypeId::DECIMAL:
-            if(value.type().id() == LogicalTypeId::DOUBLE || value.type().id() == LogicalTypeId::FLOAT) {
-                return type.id() == LogicalTypeId::FLOAT ? Value::DOUBLE(value.asDouble()) : Value::DOUBLE(value.asDouble());
-            }
-            return Value::DOUBLE(static_cast<double>(value.asInt64()));
-        case LogicalTypeId::VARCHAR:
-            return value.type().id() == LogicalTypeId::VARCHAR ? value : Value(value.asString());
-        case LogicalTypeId::LIST:
-            return value;
-        default: {
-            Value out;
-            if(value.type().id() == LogicalTypeId::DOUBLE || value.type().id() == LogicalTypeId::FLOAT) {
-                out = Value::BIGINT(static_cast<std::int64_t>(value.asDouble()));
-            } else if(value.type().id() == LogicalTypeId::VARCHAR) {
-                out = value;
-            } else {
-                out = Value::BIGINT(value.asInt64());
-            }
-            return out;
+class Connection {
+public:
+    explicit Connection(DuckDB& db) : id_(volt_duckdb_connect(db.id())) {}
+    ~Connection() { volt_duckdb_disconnect(id_); }
+    Connection(const Connection&) = delete;
+    Connection& operator=(const Connection&) = delete;
+
+    std::unique_ptr<QueryResult> Query(const std::string& sql) {
+        return detail::takeReply(volt_duckdb_query(id_, sql.c_str()));
+    }
+
+    int id() const { return id_; }
+
+private:
+    int id_;
+};
+
+// Rows for a table, sent to the engine as CSV in the table's column order when the appender closes
+// (or, for a large table, as its buffer fills), as the real Appender flushes its chunks.
+class Appender {
+public:
+    Appender(Connection& connection, std::string tableName)
+        : connection_(&connection), tableName_(std::move(tableName)) {}
+
+    ~Appender() {
+        try {
+            Close();
+        } catch(...) {
         }
     }
-}
 
-inline void Appender::EndRow() {
-    auto it = db_->tables.find(tableName_);
-    if(it == db_->tables.end()) throw std::runtime_error("unknown table " + tableName_);
-    auto& table = it->second;
-    while(current_.size() < table.types.size()) current_.emplace_back(table.types[current_.size()]);
-    for(std::size_t i = 0; i < table.types.size(); ++i){
-        current_[i] = coerceValue(std::move(current_[i]), table.types[i]);
+    Appender(const Appender&) = delete;
+    Appender& operator=(const Appender&) = delete;
+
+    void BeginRow() { firstInRow_ = true; }
+
+    void EndRow() {
+        csv_.push_back('\n');
+        if(csv_.size() >= kFlushBytes) Flush();
     }
-    table.rows.push_back(std::move(current_));
-    current_.clear();
-}
+
+    template<typename T>
+    void Append(T value) {
+        separate();
+        if constexpr(std::is_same_v<T, bool>) {
+            csv_ += value ? "true" : "false";
+        } else if constexpr(std::is_floating_point_v<T>) {
+            writeDouble(static_cast<double>(value));
+        } else if constexpr(std::is_integral_v<T>) {
+            csv_ += std::to_string(value);
+        } else {
+            writeValue(Value(value));
+        }
+    }
+
+    void Append(const Value& value) {
+        separate();
+        writeValue(value);
+    }
+
+    void Flush() {
+        if(csv_.empty()) return;
+        auto result = detail::takeReply(volt_duckdb_append(connection_->id(), tableName_.c_str(), csv_.data(), csv_.size()));
+        csv_.clear();
+        if(result->HasError()) throw std::runtime_error("Failed to append to " + tableName_ + ": " + result->GetError());
+    }
+
+    void Close() { Flush(); }
+
+private:
+    static constexpr std::size_t kFlushBytes = 64u << 20;
+
+    void separate() {
+        if(!firstInRow_) csv_.push_back(',');
+        firstInRow_ = false;
+    }
+
+    void writeDouble(double value) {
+        if(std::isnan(value)) {
+            csv_ += "nan";
+        } else if(std::isinf(value)) {
+            csv_ += value > 0 ? "inf" : "-inf";
+        } else {
+            char text[32];
+            std::snprintf(text, sizeof(text), "%.17g", value);
+            csv_ += text;
+        }
+    }
+
+    // A list's literal, as DuckDB casts text to a list: [1.5, 2.0], nested as needed.
+    void writeListLiteral(const Value& value) {
+        csv_.push_back('[');
+        bool first = true;
+        for(const auto& item : value.asList()){
+            if(!first) csv_ += ", ";
+            first = false;
+            if(item.isNull()) {
+                csv_ += "NULL";
+            } else if(item.type().id() == LogicalTypeId::LIST) {
+                writeListLiteral(item);
+            } else if(item.type().id() == LogicalTypeId::VARCHAR) {
+                csv_ += '\'' + item.asString() + '\'';
+            } else {
+                writeScalar(item);
+            }
+        }
+        csv_.push_back(']');
+    }
+
+    void writeScalar(const Value& value) {
+        const auto id = value.type().id();
+        if(id == LogicalTypeId::DOUBLE || id == LogicalTypeId::FLOAT || id == LogicalTypeId::DECIMAL) {
+            writeDouble(value.asDouble());
+        } else if(id == LogicalTypeId::BOOLEAN) {
+            csv_ += value.asInt64() ? "true" : "false";
+        } else {
+            csv_ += std::to_string(value.asInt64());
+        }
+    }
+
+    // A field: NULL unquoted and empty, text and lists quoted with their quotes doubled.
+    void writeValue(const Value& value) {
+        if(value.isNull()) return;
+        const auto id = value.type().id();
+        if(id != LogicalTypeId::VARCHAR && id != LogicalTypeId::LIST) {
+            writeScalar(value);
+            return;
+        }
+        csv_.push_back('"');
+        const auto start = csv_.size();
+        if(id == LogicalTypeId::LIST) {
+            writeListLiteral(value);
+        } else {
+            csv_ += value.asString();
+        }
+        for(auto i = csv_.size(); i-- > start;){
+            if(csv_[i] == '"') csv_.insert(i, 1, '"');
+        }
+        csv_.push_back('"');
+    }
+
+    Connection* connection_;
+    std::string tableName_;
+    std::string csv_;
+    bool firstInRow_ = true;
+};
 
 }

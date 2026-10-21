@@ -6,9 +6,10 @@ if ! command -v emcmake >/dev/null 2>&1; then
     exit 1
 fi
 
+# Without a plugin it builds CoreToolkit's own programs (the daemon's tools).
 plugin_dir="${1:-}"
-if [[ -z "$plugin_dir" || ! -d "$plugin_dir" ]]; then
-    echo "usage: $0 <plugin-source-dir> [dependency-dir...]" >&2
+if [[ -n "$plugin_dir" && ! -d "$plugin_dir" ]]; then
+    echo "usage: $0 [plugin-source-dir [dependency-dir...]]" >&2
     exit 1
 fi
 shift || true
@@ -40,7 +41,7 @@ emcmake cmake -S "$here/cmake/wasm" -B "$build_dir" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$install_dir" \
-    -DVOLT_PLUGIN_SOURCE="$(cd "$plugin_dir" && pwd)" \
+    -DVOLT_PLUGIN_SOURCE="${plugin_dir:+$(cd "$plugin_dir" && pwd)}" \
     -DVOLT_CORETOOLKIT_SOURCE="$here" \
     -DVOLT_LAMMPSIO_SOURCE="$lammpsio_dir" \
     -DVOLT_DEPENDENCY_DIRS="$dep_joined" \
@@ -52,4 +53,4 @@ emcmake cmake -S "$here/cmake/wasm" -B "$build_dir" \
 
 cmake --build "$build_dir" --config Release --parallel
 cmake --install "$build_dir" --config Release
-echo "Installed wasm plugin to $install_dir"
+echo "Installed wasm build to $install_dir"

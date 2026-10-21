@@ -16,14 +16,12 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 add_compile_options(-fexceptions)
 add_link_options("SHELL:-sDISABLE_EXCEPTION_CATCHING=0")
 
+# Without a plugin, the build is CoreToolkit's own programs: the daemon's tools.
 set(VOLT_PLUGIN_SOURCE "" CACHE PATH "Plugin source tree")
 set(VOLT_CORETOOLKIT_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "CoreToolkit source tree")
 set(VOLT_LAMMPSIO_SOURCE "" CACHE PATH "LammpsIO source tree")
 set(VOLT_DEPENDENCY_DIRS "" CACHE STRING "Semicolon-separated sibling plugin source trees")
 
-if(NOT VOLT_PLUGIN_SOURCE)
-    message(FATAL_ERROR "VOLT_PLUGIN_SOURCE is required")
-endif()
 if(NOT VOLT_LAMMPSIO_SOURCE)
     message(FATAL_ERROR "VOLT_LAMMPSIO_SOURCE is required")
 endif()
@@ -140,4 +138,6 @@ foreach(_dep IN LISTS VOLT_DEPENDENCY_DIRS)
     volt_alias_exported_target("${_dep}")
 endforeach()
 
-add_subdirectory("${VOLT_PLUGIN_SOURCE}" "${CMAKE_BINARY_DIR}/_plugin")
+if(VOLT_PLUGIN_SOURCE)
+    add_subdirectory("${VOLT_PLUGIN_SOURCE}" "${CMAKE_BINARY_DIR}/_plugin")
+endif()

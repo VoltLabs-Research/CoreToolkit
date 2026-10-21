@@ -198,12 +198,43 @@ target_link_libraries(${PROJECT_NAME} PUBLIC ${_CORETOOLKIT_LINK})
 # Install main library and embedded libs
 install(TARGETS ${PROJECT_NAME} mwm_csp geogram DESTINATION lib)
 
-if(NOT EMSCRIPTEN)
-	# volt-dump-transform — daemon-side LAMMPS dump mutator (slice / select / merge).
-	# Links the coretoolkit target so it inherits the LAMMPS parser, the expression
-	# engine and duckdb (Parquet reader) transitively.
-	add_executable(volt-dump-transform tools/dump_transform.cpp)
-	target_link_libraries(volt-dump-transform PRIVATE ${PROJECT_NAME})
+# volt-dump-transform — daemon-side LAMMPS dump mutator (slice / select / merge).
+# Links the coretoolkit target so it inherits the LAMMPS parser, the expression
+# engine and duckdb (Parquet reader) transitively. Its WebAssembly build is a Node
+# program, as the plugins' are, querying the DuckDB of the machine it runs on.
+add_executable(volt-dump-transform tools/dump_transform.cpp)
+target_link_libraries(volt-dump-transform PRIVATE ${PROJECT_NAME})
+if(EMSCRIPTEN)
+	include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VoltPlugin.cmake")
+	volt_wasm_program(volt-dump-transform)
+
+	# zstd, which the daemon compresses and decompresses its stored dumps with: a native machine has
+	# its own, a browser's has none. The command-line program alone, as zstd's own frugal build makes
+	# it (no benchmark, dictionary builder or trace), single-threaded, from the release's sources.
+	enable_language(C)
+	include(FetchContent)
+	FetchContent_Declare(zstd_src
+		URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+		URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+		DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+	)
+	FetchContent_GetProperties(zstd_src)
+	if(NOT zstd_src_POPULATED)
+		FetchContent_Populate(zstd_src)
+	endif()
+	file(GLOB _zstd_sources
+		"${zstd_src_SOURCE_DIR}/lib/common/*.c"
+		"${zstd_src_SOURCE_DIR}/lib/compress/*.c"
+		"${zstd_src_SOURCE_DIR}/lib/decompress/*.c")
+	foreach(_program zstdcli util timefn fileio fileio_asyncio)
+		list(APPEND _zstd_sources "${zstd_src_SOURCE_DIR}/programs/${_program}.c")
+	endforeach()
+	add_executable(zstd ${_zstd_sources})
+	target_include_directories(zstd PRIVATE "${zstd_src_SOURCE_DIR}/lib" "${zstd_src_SOURCE_DIR}/lib/common")
+	target_compile_definitions(zstd PRIVATE ZSTD_NOBENCH ZSTD_NODICT ZSTD_NOTRACE ZSTD_DISABLE_ASM ZSTD_LEGACY_SUPPORT=0)
+	volt_wasm_program(zstd)
+	install(TARGETS zstd DESTINATION bin)
+else()
 	# The daemon ships this binary inside its container and runs it on whatever Linux
 	# the user enrolled (the dev daemon runs in an Ubuntu 24.04 / glibc 2.39 image).
 	# Two portability hazards: (1) a binary built against a newer host glibc fails to
@@ -221,8 +252,8 @@ if(NOT EMSCRIPTEN)
 	if(APPLE)
 	    target_link_options(volt-dump-transform PRIVATE "LINKER:-rpath,@loader_path")
 	endif()
-	install(TARGETS volt-dump-transform DESTINATION bin)
 endif()
+install(TARGETS volt-dump-transform DESTINATION bin)
 
 # HPC optimization flags for Release builds (propagate to all consumers via PUBLIC).
 # VOLT_RELEASE_ARCH_FLAGS is set once near the top of this file.

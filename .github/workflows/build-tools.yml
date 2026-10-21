@@ -156,9 +156,81 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  # The tools of a daemon running in a browser (VOLT's @volt/web-runtime): Node programs, with zstd,
+  # which a native machine has of its own.
+  build-wasm:
+    name: volt-dump-transform, zstd (wasm-wasm32)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out CoreToolkit
+        uses: actions/checkout@v4
+        with:
+          path: coretoolkit
+
+      - name: Check out LammpsIO
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/LammpsIO
+          path: lammpsio
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+
+      - name: Build
+        shell: bash
+        env:
+          VOLT_LAMMPSIO_SOURCE: ${{ github.workspace }}/lammpsio
+          VOLT_WASM_BUILD_DIR: ${{ github.workspace }}/.wasm-build
+          VOLT_WASM_INSTALL_DIR: ${{ github.workspace }}/.ci-install-wasm
+        run: bash coretoolkit/scripts/build-wasm-plugin.sh
+
+      - name: Bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in volt-dump-transform zstd; do
+            python "$PWD/coretoolkit/.github/scripts/build_tool_bundle.py" \
+              --tool "$tool" \
+              --build-dir "$PWD/.wasm-build" \
+              --install-dir "$PWD/.ci-install-wasm" \
+              --os wasm \
+              --arch wasm32 \
+              --output-dir "$PWD/artifacts"
+          done
+
+      - name: Smoke-run the bundled programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          for archive in artifacts/*-wasm-wasm32.tar.gz; do tar -xzf "$archive" -C smoke; done
+          # volt-dump-transform queries the DuckDB of the machine it runs on: the global npm package
+          # VOLT's browser runtime installs (@volt/web-runtime pins its version).
+          npm install --no-save --prefix "$RUNNER_TEMP/global" @duckdb/duckdb-wasm@1.32.0
+          set +e
+          NODE_PATH="$RUNNER_TEMP/global/node_modules" smoke/bin/volt-dump-transform >/dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 2
+          head -c 1048576 /dev/urandom > sample
+          smoke/bin/zstd -q -c sample | zstd -d -q -c | cmp - sample
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: volt-dump-transform-wasm-wasm32
+          path: artifacts/*
+          if-no-files-found: error
+
   release:
     name: Attach to release
-    needs: build
+    needs: [build, build-wasm]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     runs-on: ubuntu-latest
     permissions:

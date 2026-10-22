@@ -88,6 +88,7 @@ int threadBudget(){
 int bindToNumaNode(){
     const std::vector<tbb::numa_node_id> nodes = tbb::info::numa_nodes();
     if(nodes.size() <= 1){
+        spdlog::info("NUMA: a single node is visible, the process stays unbound");
         return -1;
     }
 

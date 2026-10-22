@@ -1,7 +1,11 @@
 #include <volt/utilities/parquet_line_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
+#include <volt/core/progress.h>
+
+#include "byte_size.h"
 
 #include <duckdb.hpp>
+#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -89,6 +93,7 @@ void streamLinesToParquet(
     const LinePointsResolver& resolvePoints,
     const PerLineColumnWriter& writePerLineColumns
 ){
+    const Stopwatch timer;
     const duckdb::LogicalType pointType = duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
 
     std::vector<duckdb::Value> pointLists;
@@ -98,9 +103,11 @@ void streamLinesToParquet(
     ColumnarLineWriter writer(dyn);
 
     std::vector<Point3> linePoints;
+    std::size_t pointCount = 0;
     for(std::size_t i = 0; i < lineCount; ++i){
         linePoints.clear();
         if(resolvePoints) resolvePoints(i, linePoints);
+        pointCount += linePoints.size();
 
         std::vector<duckdb::Value> points;
         points.reserve(linePoints.size());
@@ -150,6 +157,9 @@ void streamLinesToParquet(
     }
 
     Detail::copyTableToParquet(con, "lines", filePath);
+
+    spdlog::info("  Wrote {} line rows x {} columns, {} points ({}) in {}",
+        lineCount, 2 + dyn.columns.size(), pointCount, Detail::writtenFileSize(filePath), timer.elapsed());
 }
 
 }

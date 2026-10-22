@@ -3,6 +3,7 @@
 #include <volt/cli/common.h>
 #include <volt/core/analysis_result.h>
 #include <volt/core/lammps_parser.h>
+#include <volt/core/progress.h>
 #include <volt/core/runtime_budget.h>
 
 #include <functional>
@@ -220,12 +221,12 @@ inline std::vector<std::string> splitFrameList(const std::string& raw) {
     return files;
 }
 
-inline bool reportFailure(const json& result, const PluginDescriptor& desc) {
+inline bool reportFailure(const json& result, const PluginDescriptor& desc, const Stopwatch& runTimer) {
     if (result.value("is_failed", false)) {
-        spdlog::error("Analysis failed: {}", result.value("error", "Unknown error"));
+        spdlog::error("Analysis failed after {}: {}", runTimer.elapsed(), result.value("error", "Unknown error"));
         return true;
     }
-    spdlog::info("{} completed.", desc.description);
+    spdlog::info("{} completed in {}.", desc.description, runTimer.elapsed());
     return false;
 }
 
@@ -245,6 +246,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     }
 
     CLI::initLogging(desc.name);
+    const Stopwatch runTimer;
     Detail::applyResourceBudget(opts);
     logParameters(desc, opts);
 
@@ -258,6 +260,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
         std::string refFile = CLI::getString(opts, "--reference");
         if (!refFile.empty()) {
             spdlog::info("Parsing reference file: {}", refFile);
+            const Stopwatch refTimer;
             LammpsParser refParser;
             if (!refParser.parseFile(refFile, refFrame)) {
                 spdlog::error("Failed to parse reference file: {}", refFile);
@@ -269,7 +272,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
                 return 1;
             }
             refFramePtr = &refFrame;
-            spdlog::info("Reference loaded: {} atoms", refFrame.natoms);
+            spdlog::info("Reference loaded: {} atoms (timestep {}) in {}", refFrame.natoms, refFrame.timestep, refTimer.elapsed());
         }
     }
 
@@ -278,7 +281,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
 
     json result = Detail::runReportingFailures([&]{ return run(opts, frame, refFramePtr, outputBase); });
 
-    return Detail::reportFailure(result, desc) ? 1 : 0;
+    return Detail::reportFailure(result, desc, runTimer) ? 1 : 0;
 }
 
 inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& desc, PluginMultiFrameRunFn run) {
@@ -295,6 +298,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     }
 
     CLI::initLogging(desc.name);
+    const Stopwatch runTimer;
     Detail::applyResourceBudget(opts);
     logParameters(desc, opts);
 
@@ -323,7 +327,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
 
     json result = Detail::runReportingFailures([&]{ return run(opts, frames, primaryIndex, outputBase); });
 
-    return Detail::reportFailure(result, desc) ? 1 : 0;
+    return Detail::reportFailure(result, desc, runTimer) ? 1 : 0;
 }
 
 }

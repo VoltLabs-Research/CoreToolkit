@@ -1,5 +1,8 @@
 #include <volt/analysis/nearest_neighbor_finder.h>
 #include <volt/core/particle_property.h>
+#include <volt/core/progress.h>
+
+#include <cstdint>
 
 namespace Volt{
 
@@ -276,6 +279,9 @@ bool NearestNeighborFinder::prepare(
 	const Point3* p = posProperty->constDataPoint3();
 	atoms.resize(posProperty->size());
 
+	// Serial, about 0.5 s per million atoms: only systems of a few million atoms print a step.
+	ProgressReporter progress("  Indexing atoms for neighbor search", atoms.size());
+	std::uint64_t inserted = 0;
 	for(NeighborListAtom& a : atoms){
 		a.pos = *p;
 		Point3 rp = simCell.absoluteToReduced(a.pos);
@@ -290,6 +296,7 @@ bool NearestNeighborFinder::prepare(
 
 		insertParticle(&a, rp, root, 0);
 		++p;
+		progress.update(++inserted);
 	}
 
 	root->convertToAbsoluteCoordinates(simCell);

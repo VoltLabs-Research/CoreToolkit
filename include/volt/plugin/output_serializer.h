@@ -34,9 +34,9 @@ inline void serializePluginOutput(
 
     if (config.bucketResolver) {
         const std::string atomsPath = outputBase + "_atoms.parquet";
+        spdlog::info("Exporting atoms data to: {}", atomsPath);
         streamAtomsToParquet(atomsPath, frame, config.bucketResolver, config.perAtomColumnWriter,
                              config.resolveStructureId, config.includeStructureColumns);
-        spdlog::info("Exported atoms data to: {}", atomsPath);
     }
 }
 

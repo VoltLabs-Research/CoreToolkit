@@ -1,8 +1,12 @@
 #include <volt/utilities/parquet_atom_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
+#include <volt/core/progress.h>
 #include <volt/math/point3.h>
 
+#include "byte_size.h"
+
 #include <duckdb.hpp>
+#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <map>
@@ -95,6 +99,7 @@ void streamAtomsToParquet(
     const StructureIdResolver& resolveStructureId,
     bool includeStructureColumns
 ){
+    const Stopwatch timer;
     const std::size_t natoms = static_cast<std::size_t>(frame.natoms);
 
     std::map<std::string, std::int32_t> bucketId;
@@ -115,6 +120,7 @@ void streamAtomsToParquet(
     ColumnarAtomWriter::Impl dyn;
     ColumnarAtomWriter writer(dyn);
 
+    ProgressReporter collectProgress("  Collecting atom rows", natoms);
     for(std::size_t i = 0; i < natoms; ++i){
         const std::string bucket = resolveBucket(i);
         const std::int32_t sid = resolveStructureId
@@ -134,7 +140,9 @@ void streamAtomsToParquet(
 
         if(writePerAtomColumns) writePerAtomColumns(writer, i);
         dyn.finishRow();
+        collectProgress.update(i + 1);
     }
+    const auto collected = timer.elapsedTime();
 
     auto db = Volt::Detail::openInMemoryDb();
     duckdb::Connection con(*db);
@@ -161,6 +169,7 @@ void streamAtomsToParquet(
 
     {
         duckdb::Appender appender(con, "atoms");
+        ProgressReporter loadProgress("  Loading atom rows into DuckDB", natoms);
         for(std::size_t i = 0; i < natoms; ++i){
             appender.BeginRow();
             appender.Append<std::uint32_t>(atomIndex[i]);
@@ -177,11 +186,19 @@ void streamAtomsToParquet(
                 appender.Append(col.values[i]);
             }
             appender.EndRow();
+            loadProgress.update(i + 1);
         }
         appender.Close();
     }
+    const auto loaded = timer.elapsedTime();
 
     Detail::copyTableToParquet(con, "atoms", filePath);
+
+    const auto total = timer.elapsedTime();
+    const std::size_t columnCount = 6 + (includeStructureColumns ? 2 : 0) + dyn.columns.size();
+    spdlog::info("  Wrote {} atom rows x {} columns ({}) in {}: collect {}, DuckDB load {}, Parquet {}",
+        natoms, columnCount, Detail::writtenFileSize(filePath), formatDuration(total),
+        formatDuration(collected), formatDuration(loaded - collected), formatDuration(total - loaded));
 }
 
 }

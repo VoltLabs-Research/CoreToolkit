@@ -619,6 +619,17 @@ inline bool toFrame(const lammpsio::ParsedFrame& parsed,
     return true;
 }
 
+// What the reader decided that the caller's load and cell lines do not show.
+inline void logParsedFrame(const lammpsio::ParsedFrame& parsed, const LammpsParser::Frame& frame){
+    spdlog::info("  Format: {}, {} cell, {}",
+        parsed.header.format ? parsed.header.format : "unknown",
+        buildDumpBoxBounds(frame.simulationCell).triclinic ? "triclinic" : "orthogonal",
+        frame.atomColumnsScaled ? "scaled coordinates converted to Cartesian" : "Cartesian coordinates");
+    if(frame.natoms > 0 && frame.ids.empty()){
+        spdlog::warn("  No atom id column: atoms are numbered by their order in the file");
+    }
+}
+
 }
 
 using namespace LammpsParserDetail;
@@ -638,7 +649,11 @@ bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
         return false;
     }
 
-    return LammpsParserDetail::toFrame(parsed, allocator, frame);
+    if(!LammpsParserDetail::toFrame(parsed, allocator, frame)){
+        return false;
+    }
+    LammpsParserDetail::logParsedFrame(parsed, frame);
+    return true;
 }
 
 bool LammpsParser::parseBuffer(const char* data, std::size_t size, Frame &frame){
@@ -661,7 +676,11 @@ bool LammpsParser::parseBuffer(const char* data, std::size_t size, Frame &frame)
         return false;
     }
 
-    return LammpsParserDetail::toFrame(parsed, allocator, frame);
+    if(!LammpsParserDetail::toFrame(parsed, allocator, frame)){
+        return false;
+    }
+    LammpsParserDetail::logParsedFrame(parsed, frame);
+    return true;
 }
 
 bool LammpsParser::writeFile(const std::string& filename, const Frame& frame){

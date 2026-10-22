@@ -1,7 +1,11 @@
 #include <volt/utilities/parquet_mesh_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
+#include <volt/core/progress.h>
+
+#include "byte_size.h"
 
 #include <duckdb.hpp>
+#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -29,6 +33,7 @@ void streamMeshTablesToParquet(
     const std::vector<Point3>& vertices,
     const std::vector<std::array<int, 3>>& facets
 ){
+    const Stopwatch timer;
     auto db = Volt::Detail::openInMemoryDb();
     duckdb::Connection con(*db);
 
@@ -69,6 +74,10 @@ void streamMeshTablesToParquet(
 
     Detail::copyTableToParquet(con, "vertices", verticesPath);
     Detail::copyTableToParquet(con, "facets", facetsPath);
+
+    spdlog::info("  Wrote mesh tables: {} vertices ({}), {} facets ({}) in {}",
+        vertices.size(), Detail::writtenFileSize(verticesPath),
+        facets.size(), Detail::writtenFileSize(facetsPath), timer.elapsed());
 }
 
 }

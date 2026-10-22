@@ -1,7 +1,11 @@
 #include <volt/utilities/parquet_bond_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
+#include <volt/core/progress.h>
+
+#include "byte_size.h"
 
 #include <duckdb.hpp>
+#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -90,6 +94,7 @@ void streamBondsToParquet(
     const std::vector<Bond>& bonds,
     const PerBondColumnWriter& writePerBondColumns
 ){
+    const Stopwatch timer;
     const std::size_t bondCount = bonds.size();
     const duckdb::LogicalType pointType = duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
 
@@ -163,6 +168,9 @@ void streamBondsToParquet(
     }
 
     Detail::copyTableToParquet(con, "bonds", filePath);
+
+    spdlog::info("  Wrote {} bond rows x {} columns ({}) in {}",
+        bondCount, 8 + dyn.columns.size(), Detail::writtenFileSize(filePath), timer.elapsed());
 }
 
 }

@@ -1,4 +1,5 @@
 #include <volt/core/lammps_parser.h>
+#include <volt/core/progress.h>
 #include <lammpsio/reader_registry.hpp>
 #include <algorithm>
 #include <atomic>
@@ -17,6 +18,8 @@
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
+
+#include "../utilities/byte_size.h"
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <fcntl.h>
@@ -201,6 +204,14 @@ inline void writeDefaultExtraValue(std::ostream& out, DataType dataType){
     }
 }
 
+// tellp() counts the buffered bytes too, so the size needs no stat of a file that is still open.
+inline void logDumpWritten(std::ofstream& out, std::size_t atomCount, std::size_t columnCount, const Stopwatch& timer){
+    const std::streamoff bytes = out.tellp();
+    spdlog::info("  Wrote LAMMPS dump: {} atoms x {} columns ({}) in {}", atomCount, columnCount,
+        bytes >= 0 ? Detail::formatByteSize(static_cast<std::uintmax_t>(bytes)) : std::string("size unknown"),
+        timer.elapsed());
+}
+
 inline void writeExtraValue(std::ostream& out, const ExpandedExtraColumn& column, std::size_t rowIndex){
     const auto* row = static_cast<const std::uint8_t*>(column.data) + rowIndex * column.stride;
 
@@ -229,6 +240,7 @@ inline bool writeDump(
     const std::vector<int>* propertyRowsByAtomIndex,
     const std::vector<LammpsParser::ExtraHeader>& extraHeaders
 ){
+    const Stopwatch timer;
     if(frame.natoms < 0){
         std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
         return false;
@@ -288,6 +300,7 @@ inline bool writeDump(
     }
     out << '\n';
 
+    ProgressReporter progress("  Writing LAMMPS dump", atomCount);
     for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
         const int atomId = resolveAtomId(frame, atomIndex);
         const int atomType = resolveAtomType(frame, atomIndex);
@@ -312,9 +325,14 @@ inline bool writeDump(
             }
         }
         out << '\n';
+        progress.update(atomIndex + 1);
     }
 
-    return static_cast<bool>(out);
+    const bool written = static_cast<bool>(out);
+    if(written){
+        logDumpWritten(out, atomCount, 5 + extraColumns.size(), timer);
+    }
+    return written;
 }
 
 inline void mergeHeaders(
@@ -357,6 +375,7 @@ inline bool writeMergedDump(
     const std::vector<LammpsParser::ExtraHeader>& extraHeaders,
     bool overwriteExistingColumns
 ){
+    const Stopwatch timer;
     if(frame.natoms < 0){
         std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
         return false;
@@ -445,6 +464,7 @@ inline bool writeMergedDump(
 
     const auto& inverseCell = frame.simulationCell.inverseMatrix();
 
+    ProgressReporter progress("  Writing LAMMPS dump", atomCount);
     for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
         const int atomId = resolveAtomId(frame, atomIndex);
         const int atomType = resolveAtomType(frame, atomIndex);
@@ -531,9 +551,14 @@ inline bool writeMergedDump(
             }
         }
         out << '\n';
+        progress.update(atomIndex + 1);
     }
 
-    return static_cast<bool>(out);
+    const bool written = static_cast<bool>(out);
+    if(written){
+        logDumpWritten(out, atomCount, columnOrder.size(), timer);
+    }
+    return written;
 }
 
 inline bool toFrame(const lammpsio::ParsedFrame& parsed,

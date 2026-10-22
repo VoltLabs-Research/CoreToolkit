@@ -153,6 +153,25 @@ inline std::optional<int> handleIntrospection(
     return std::nullopt;
 }
 
+// One line with the value every plugin option resolved to, defaults included, so the log shows
+// the exact configuration of the run. Paths are left out: the input lines already name them.
+inline void logParameters(const PluginDescriptor& desc, const OptsMap& opts) {
+    std::string line;
+    for (const auto& opt : desc.options) {
+        if (opt.type == "path" || opt.type == "path-list") continue;
+        const auto it = opts.find(opt.name);
+        const std::string& value = it != opts.end() ? it->second : opt.defaultVal;
+        if (value.empty()) continue;
+        if (!line.empty()) line += ", ";
+        line += opt.name.rfind("--", 0) == 0 ? opt.name.substr(2) : opt.name;
+        line += '=';
+        line += value;
+    }
+    if (!line.empty()) {
+        spdlog::info("Parameters: {}", line);
+    }
+}
+
 namespace Detail {
 
 inline void applyResourceBudget(const OptsMap& opts) {
@@ -227,6 +246,7 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
 
     CLI::initLogging(desc.name);
     Detail::applyResourceBudget(opts);
+    logParameters(desc, opts);
 
     LammpsParser::Frame frame;
     if (!CLI::parseFrame(filename, frame)) return 1;
@@ -276,6 +296,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
 
     CLI::initLogging(desc.name);
     Detail::applyResourceBudget(opts);
+    logParameters(desc, opts);
 
     std::vector<std::string> frameFiles;
     const std::string framesArg = CLI::getString(opts, "--frames");

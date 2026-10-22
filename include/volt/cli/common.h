@@ -1,6 +1,7 @@
 #pragma once
 
 #include <volt/core/lammps_parser.h>
+#include <volt/core/progress.h>
 #include <volt/utilities/json_utils.h>
 
 #include <cstdlib>
@@ -64,14 +65,33 @@ inline std::string deriveOutputBase(const std::string& filename, const std::stri
     return (inputPath.parent_path() / inputPath.stem()).string();
 }
 
+inline void logFrameLayout(const LammpsParser::Frame& frame) {
+    const auto& cell = frame.simulationCell;
+    const auto& pbc = cell.pbcFlags();
+    spdlog::info("Simulation cell: {:.3f} x {:.3f} x {:.3f}, volume {:.4g}, periodic [{} {} {}]",
+        cell.matrix().column(0).length(), cell.matrix().column(1).length(), cell.matrix().column(2).length(),
+        cell.volume3D(), pbc[0] ? "x" : "-", pbc[1] ? "y" : "-", pbc[2] ? "z" : "-");
+
+    std::string columns;
+    for (const auto& name : frame.atomColumnOrder) {
+        if (!columns.empty()) columns += ' ';
+        columns += name;
+    }
+    if (!columns.empty()) {
+        spdlog::info("Atom columns ({}): {}", frame.atomColumnOrder.size(), columns);
+    }
+}
+
 inline bool parseFrame(const std::string& filename, LammpsParser::Frame& frame) {
     spdlog::info("Parsing LAMMPS file: {}", filename);
+    const Stopwatch timer;
     LammpsParser parser;
     if (!parser.parseFile(filename, frame)) {
         spdlog::error("Failed to parse LAMMPS file: {}", filename);
         return false;
     }
-    spdlog::info("Successfully loaded {} atoms from the file.", frame.natoms);
+    spdlog::info("Successfully loaded {} atoms (timestep {}) in {}.", frame.natoms, frame.timestep, timer.elapsed());
+    logFrameLayout(frame);
     return true;
 }
 

@@ -1,12 +1,21 @@
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/duckdb_parquet.h>
+#include <volt/core/progress.h>
+
+#include "byte_size.h"
 
 #include <duckdb.hpp>
+#include <spdlog/spdlog.h>
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace Volt {
+
+// Summaries are a few KiB and write in milliseconds; only per-atom or per-facet payloads take long
+// enough to be worth a line in the execution log.
+constexpr std::size_t kReportedPayloadBytes = std::size_t{16} << 20;
 
 std::string normalizeParquetPath(const std::string& filePath){
     const std::string ext = ".parquet";
@@ -23,6 +32,7 @@ std::string normalizeParquetPath(const std::string& filePath){
 }
 
 void JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
+    const Stopwatch timer;
     const std::string outputPath = normalizeParquetPath(filePath);
     auto db = Volt::Detail::openInMemoryDb();
     duckdb::Connection con(*db);
@@ -34,15 +44,23 @@ void JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath
         );
     }
 
+    std::size_t payloadBytes = 0;
     {
+        std::string payload = data.dump();
+        payloadBytes = payload.size();
         duckdb::Appender appender(con, "t");
         appender.BeginRow();
-        appender.Append(duckdb::Value(data.dump()));
+        appender.Append(duckdb::Value(std::move(payload)));
         appender.EndRow();
         appender.Close();
     }
 
     Detail::copyTableToParquet(con, "t", outputPath);
+
+    if(payloadBytes >= kReportedPayloadBytes){
+        spdlog::info("  Wrote {} JSON payload as parquet ({}) in {}",
+            Detail::formatByteSize(payloadBytes), Detail::writtenFileSize(outputPath), timer.elapsed());
+    }
 }
 
 bool JsonUtils::writeJsonToFile(const json& data, const std::string& filePath, int indent){

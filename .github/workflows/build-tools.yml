@@ -23,7 +23,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # ubuntu-24.04: glibc must not be newer than the daemon's (see
+          # build-plugin-binary.yml for the full story).
+          - os: ubuntu-24.04
             os_slug: linux
             arch_slug: x86_64
           - os: macos-latest

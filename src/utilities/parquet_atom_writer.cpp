@@ -194,8 +194,7 @@ void streamAtomsToParquet(
         appender.Close();
     }
     const auto loaded = timer.elapsedTime();
-    steps.next();
-    JobProgress::instance().setText("Writing " + std::to_string(natoms) + " atom rows to Parquet");
+    steps.next("Writing " + std::to_string(natoms) + " atom rows to Parquet");
 
     Detail::copyTableToParquet(con, "atoms", filePath);
 

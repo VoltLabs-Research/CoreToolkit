@@ -12,6 +12,7 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -56,6 +57,11 @@ private:
  * TaskProgress composes its sub-steps, so the value climbs once across every pass instead of
  * restarting with each one, and it never goes back. It is off unless VOLT asks for it with
  * VOLT_PROGRESS=1, so a plugin run by hand or by an older VOLT logs what it always did.
+ *
+ * The steps belong to the thread that splits the run first (the one running the plugin): a
+ * split, a step change or a text from any other thread, such as an export run in the
+ * background with std::async, is ignored, so it cannot move the run's steps under it. Passes
+ * that thread starts may still be counted from parallel workers.
  */
 class JobProgress {
 public:
@@ -68,12 +74,32 @@ public:
 
     bool enabled() const noexcept { return enabled_; }
 
-    // Splits the current step into steps of these relative weights and enters the first.
-    void beginSteps(std::initializer_list<double> weights) {
-        if (!enabled_) return;
+    // Whether this thread drives the run's steps: its splits, step changes and passes count.
+    bool drivenFromThisThread() {
+        if (!enabled_) return false;
         std::lock_guard lock(mutex_);
+        return ownedByThisThread();
+    }
+
+    // The run's top steps, as pluginMain takes them: reading the input (a tenth of the run),
+    // then the analysis, which plugins split further with ProgressSteps. A plugin with its own
+    // main() calls beginInput, beginAnalysis and, once it succeeded, finish.
+    void beginInput(std::string text = "Reading the input frame") {
+        beginSteps({1.0, 9.0});
+        setText(std::move(text));
+    }
+
+    void beginAnalysis(std::string text) { nextStep(std::move(text)); }
+
+    // Splits the current step into steps of these relative weights and enters the first.
+    // False when this thread does not drive the run's steps, and nothing was split.
+    bool beginSteps(std::initializer_list<double> weights) {
+        if (!enabled_) return false;
+        std::lock_guard lock(mutex_);
+        if (levels_.empty()) owner_ = std::this_thread::get_id();
+        if (!ownedByThisThread()) return false;
         const auto [low, high] = currentRange();
-        Level level{low, high - low, {0.0}, 0};
+        Level level{low, high - low, {0.0}, 0, text_};
         double total = 0.0;
         for (const double weight : weights) total += std::max(0.0, weight);
         double cumulative = 0.0;
@@ -83,26 +109,38 @@ public:
         }
         if (level.bounds.size() < 2) level.bounds.push_back(1.0);
         levels_.push_back(std::move(level));
+        return true;
     }
 
-    // The current step is done; the next one of the same split starts.
+    // The current step is done; the next one of the same split starts. What the last step was
+    // doing no longer describes it, so the text goes back to the one of the step that was split.
     void nextStep() {
         if (!enabled_) return;
         std::lock_guard lock(mutex_);
-        if (levels_.empty()) return;
-        Level& level = levels_.back();
-        if (level.index + 2 < level.bounds.size()) ++level.index;
+        if (!enterNextStep()) return;
+        restoreText(levels_.back().text);
         publish(currentRange().first);
     }
 
-    // The split is over, and with it the step it divided.
+    // The next step, and what it does until one of its passes says otherwise.
+    void nextStep(std::string text) {
+        if (!enabled_) return;
+        std::lock_guard lock(mutex_);
+        if (!enterNextStep()) return;
+        restoreText(oneLine(text));
+        publish(currentRange().first);
+    }
+
+    // The split is over, and the step it divided goes on (its own next step or finish() moves
+    // the value past it). A run that fails inside a split stops where it was, not at its end.
     void endSteps() {
         if (!enabled_) return;
         std::lock_guard lock(mutex_);
-        if (levels_.empty()) return;
-        const Level level = levels_.back();
+        if (levels_.empty() || !ownedByThisThread()) return;
+        const std::string text = std::move(levels_.back().text);
         levels_.pop_back();
-        publish(level.base + level.span);
+        restoreText(text);
+        publish(reported_);
     }
 
     // How far the current step is, 0..1.
@@ -113,14 +151,12 @@ public:
         publish(low + std::clamp(fraction, 0.0, 1.0) * (high - low));
     }
 
-    // What the run is doing now; it goes out with the next value.
+    // What the run is doing now, until the step it was set in is over.
     void setText(std::string text) {
         if (!enabled_) return;
         std::lock_guard lock(mutex_);
-        text = oneLine(text);
-        if (text == text_) return;
-        text_ = std::move(text);
-        textChanged_ = true;
+        if (!ownedByThisThread()) return;
+        restoreText(oneLine(text));
         publish(reported_);
     }
 
@@ -136,7 +172,27 @@ private:
         double span;
         std::vector<double> bounds;
         std::size_t index;
+        // The text of the step this split divides.
+        std::string text;
     };
+
+    bool ownedByThisThread() const {
+        return owner_ == std::thread::id{} || owner_ == std::this_thread::get_id();
+    }
+
+    bool enterNextStep() {
+        if (levels_.empty() || !ownedByThisThread()) return false;
+        Level& level = levels_.back();
+        if (level.index + 2 < level.bounds.size()) ++level.index;
+        return true;
+    }
+
+    void restoreText(std::string text) {
+        if (text == text_) return;
+        text_ = std::move(text);
+        // VOLT keeps the last text it was given, so no text is no news.
+        textChanged_ = textChanged_ || !text_.empty();
+    }
 
     static constexpr double kMinStep = 0.005;
     static constexpr auto kMinInterval = std::chrono::milliseconds(200);
@@ -192,6 +248,7 @@ private:
 
     bool enabled_ = false;
     std::mutex mutex_;
+    std::thread::id owner_{};
     std::vector<Level> levels_;
     std::string text_;
     bool textChanged_ = false;
@@ -203,17 +260,30 @@ private:
 // One weighted split of the current step, for a plugin with several passes:
 //     ProgressSteps steps({2, 5, 1});   // neighbor lists, classification, outputs
 //     ...; steps.next(); ...; steps.next(); ...
-// Passes reported with ProgressReporter fill the step they run in.
+// Passes reported with ProgressReporter fill the step they run in, and a step without one only
+// moves the value when it is over, so give each long pass of the split its own step. On a
+// thread that does not drive the run (see JobProgress) it does nothing.
 class ProgressSteps {
 public:
-    explicit ProgressSteps(std::initializer_list<double> weights) {
-        JobProgress::instance().beginSteps(weights);
-    }
+    explicit ProgressSteps(std::initializer_list<double> weights)
+        : active_(JobProgress::instance().beginSteps(weights)) {}
     ProgressSteps(const ProgressSteps&) = delete;
     ProgressSteps& operator=(const ProgressSteps&) = delete;
-    ~ProgressSteps() { JobProgress::instance().endSteps(); }
+    ~ProgressSteps() {
+        if (active_) JobProgress::instance().endSteps();
+    }
 
-    void next() { JobProgress::instance().nextStep(); }
+    void next() {
+        if (active_) JobProgress::instance().nextStep();
+    }
+
+    // The next step, and what it does when no pass of it says so.
+    void next(std::string text) {
+        if (active_) JobProgress::instance().nextStep(std::move(text));
+    }
+
+private:
+    const bool active_;
 };
 
 // Percentage lines for a long loop that cannot flood the execution log: at most one line per
@@ -237,7 +307,7 @@ public:
         , nextMark_(markAfter(0))
         , lastLine_(start_.time_since_epoch().count())
         , forwardStep_(std::max<std::uint64_t>(1, total / kForwardsPerPass))
-        , nextForward_(JobProgress::instance().enabled() && total > 0 ? std::min(total, forwardStep_) : kNever) {
+        , nextForward_(total > 0 && JobProgress::instance().drivenFromThisThread() ? std::min(total, forwardStep_) : kNever) {
         if (nextForward_.load(std::memory_order_relaxed) != kNever) {
             JobProgress::instance().setText(label_);
         }

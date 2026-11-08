@@ -53,6 +53,27 @@ Plugin::serializePluginOutput(outputBase, frame, result, config);
 The value only ever climbs. A step without a pass moves when the step after it starts, and
 two passes in one step share it: the second moves the value once it passes the first.
 
+The text is what the current step does: a pass's label while it runs, or the one given with
+`steps.next("Writing outputs")`. When a step is over its text goes with it, back to the one of
+the step that was split (in a plugin's analysis, the descriptor's description). A run that
+fails stops where it was; only one that succeeds ends at 1.
+
+A plugin with its own `main()` takes the same top steps as `pluginMain`:
+
+```cpp
+JobProgress& progress = JobProgress::instance();
+progress.beginInput();                        // "Reading the input frame"
+// ... parse the frame ...
+progress.beginAnalysis(descriptor.description);
+json result = analyzer.compute(frame, outputBase);
+if (result.value("is_failed", false)) return 1;
+progress.finish();
+```
+
+The steps belong to the thread that runs the plugin. Splits, step changes and texts from any
+other thread (an export run with `std::async`, say) are ignored, and so are the passes it
+starts, so they cannot move the run's steps under it.
+
 ## Repository layout
 
 When `scripts/install-plugin.sh` clones the required repositories, `WORK_DIR` points directly

@@ -230,6 +230,19 @@ inline bool reportFailure(const json& result, const PluginDescriptor& desc, cons
     return false;
 }
 
+// The run's progress: reading the input, then the analysis, which plugins split further with
+// ProgressSteps. A guess the plugins refine, as OVITO's sub-step weights are.
+inline void beginRunPhases(JobProgress& progress) {
+    progress.beginSteps({1.0, 9.0});
+}
+
+// Exit code of the run; only one that succeeded reports it is done.
+inline int finishRun(const json& result, const PluginDescriptor& desc, const Stopwatch& runTimer) {
+    if (reportFailure(result, desc, runTimer)) return 1;
+    JobProgress::instance().finish();
+    return 0;
+}
+
 }
 
 inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, PluginRunFn run) {
@@ -249,6 +262,9 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     const Stopwatch runTimer;
     Detail::applyResourceBudget(opts);
     logParameters(desc, opts);
+    JobProgress& progress = JobProgress::instance();
+    Detail::beginRunPhases(progress);
+    progress.setText("Reading the input frame");
 
     LammpsParser::Frame frame;
     if (!CLI::parseFrame(filename, frame)) return 1;
@@ -279,9 +295,10 @@ inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, Plug
     outputBase = CLI::deriveOutputBase(filename, outputBase);
     spdlog::info("Output base: {}", outputBase);
 
+    progress.nextStep();
     json result = Detail::runReportingFailures([&]{ return run(opts, frame, refFramePtr, outputBase); });
 
-    return Detail::reportFailure(result, desc, runTimer) ? 1 : 0;
+    return Detail::finishRun(result, desc, runTimer);
 }
 
 inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& desc, PluginMultiFrameRunFn run) {
@@ -301,6 +318,8 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     const Stopwatch runTimer;
     Detail::applyResourceBudget(opts);
     logParameters(desc, opts);
+    JobProgress& progress = JobProgress::instance();
+    Detail::beginRunPhases(progress);
 
     std::vector<std::string> frameFiles;
     const std::string framesArg = CLI::getString(opts, "--frames");
@@ -311,12 +330,14 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
         frameFiles.push_back(filename);
     }
 
+    progress.setText(frameFiles.size() == 1 ? "Reading the input frame" : "Reading " + std::to_string(frameFiles.size()) + " input frames");
     std::vector<LammpsParser::Frame> frames(frameFiles.size());
     for (std::size_t i = 0; i < frameFiles.size(); ++i) {
         if (!CLI::parseFrame(frameFiles[i], frames[i])) {
             spdlog::error("Failed to parse window frame: {}", frameFiles[i]);
             return 1;
         }
+        progress.setFraction(static_cast<double>(i + 1) / static_cast<double>(frameFiles.size()));
     }
 
     std::size_t primaryIndex = static_cast<std::size_t>(std::max(0, CLI::getInt(opts, "--primary", 0)));
@@ -325,9 +346,10 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     outputBase = CLI::deriveOutputBase(filename, outputBase);
     spdlog::info("Output base: {} ({} frames, primary index {})", outputBase, frames.size(), primaryIndex);
 
+    progress.nextStep();
     json result = Detail::runReportingFailures([&]{ return run(opts, frames, primaryIndex, outputBase); });
 
-    return Detail::reportFailure(result, desc, runTimer) ? 1 : 0;
+    return Detail::finishRun(result, desc, runTimer);
 }
 
 }

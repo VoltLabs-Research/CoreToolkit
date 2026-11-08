@@ -30,6 +30,29 @@ Optional environment variables:
 - `GITHUB_ORG`: GitHub organization base URL. Default: `https://github.com/VoltLabs-Research`
 - `BUILD_TYPE`: local CMake build type for the target plugin. Default: `Release`
 
+## Reporting a plugin's progress to VOLT
+
+When VOLT runs a plugin it sets `VOLT_PROGRESS=1`, and the plugin's progress goes out as
+`@volt:progress <0..1> <text>` lines on stderr, which VOLT shows on the job. Without that
+variable nothing is written, so a plugin run by hand logs what it always did.
+
+`pluginMain` splits the run into reading the input and the analysis. A plugin with several
+passes splits its analysis further with `ProgressSteps`, the way OVITO weighs its sub-steps;
+each `ProgressReporter` pass fills the step it runs in, under its label:
+
+```cpp
+ProgressSteps steps({1, 6, 2});        // neighbor lists, classification, outputs
+neighborFinder.prepare(positions, cell);
+steps.next();
+ProgressReporter progress("Classifying atoms", atomCount);
+// ... progress.advance(range.size()) ...
+steps.next();
+Plugin::serializePluginOutput(outputBase, frame, result, config);
+```
+
+The value only ever climbs. A step without a pass moves when the step after it starts, and
+two passes in one step share it: the second moves the value once it passes the first.
+
 ## Repository layout
 
 When `scripts/install-plugin.sh` clones the required repositories, `WORK_DIR` points directly

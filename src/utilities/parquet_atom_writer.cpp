@@ -120,6 +120,8 @@ void streamAtomsToParquet(
     ColumnarAtomWriter::Impl dyn;
     ColumnarAtomWriter writer(dyn);
 
+    // Collecting, loading and writing take the step this export runs in, about evenly.
+    ProgressSteps steps({1.0, 1.0, 1.0});
     ProgressReporter collectProgress("  Collecting atom rows", natoms);
     for(std::size_t i = 0; i < natoms; ++i){
         const std::string bucket = resolveBucket(i);
@@ -143,6 +145,7 @@ void streamAtomsToParquet(
         collectProgress.update(i + 1);
     }
     const auto collected = timer.elapsedTime();
+    steps.next();
 
     auto db = Volt::Detail::openInMemoryDb();
     duckdb::Connection con(*db);
@@ -191,6 +194,8 @@ void streamAtomsToParquet(
         appender.Close();
     }
     const auto loaded = timer.elapsedTime();
+    steps.next();
+    JobProgress::instance().setText("Writing " + std::to_string(natoms) + " atom rows to Parquet");
 
     Detail::copyTableToParquet(con, "atoms", filePath);
 

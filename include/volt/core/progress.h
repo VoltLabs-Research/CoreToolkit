@@ -122,13 +122,15 @@ public:
         publish(currentRange().first);
     }
 
-    // The next step, and what it does until one of its passes says otherwise.
+    // The next step, and what it does until one of its passes says otherwise. A step of no
+    // weight (a phase this run skips) keeps the text it found, since nothing runs in it.
     void nextStep(std::string text) {
         if (!enabled_) return;
         std::lock_guard lock(mutex_);
         if (!enterNextStep()) return;
-        restoreText(oneLine(text));
-        publish(currentRange().first);
+        const auto [low, high] = currentRange();
+        if (high > low) restoreText(oneLine(text));
+        publish(low);
     }
 
     // The split is over, and the step it divided goes on (its own next step or finish() moves

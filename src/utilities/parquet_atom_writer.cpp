@@ -1,12 +1,11 @@
 #include <volt/utilities/parquet_atom_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
+#include <volt/utilities/parquet_writer_log.h>
 #include <volt/core/progress.h>
 #include <volt/math/point3.h>
-
-#include "byte_size.h"
+#include <volt/plugin/output_files.h>
 
 #include <duckdb.hpp>
-#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <map>
@@ -99,7 +98,7 @@ void streamAtomsToParquet(
     const StructureIdResolver& resolveStructureId,
     bool includeStructureColumns
 ){
-    const Stopwatch timer;
+    ParquetWriterLog log;
     const std::size_t natoms = static_cast<std::size_t>(frame.natoms);
 
     std::map<std::string, std::int32_t> bucketId;
@@ -120,8 +119,11 @@ void streamAtomsToParquet(
     ColumnarAtomWriter::Impl dyn;
     ColumnarAtomWriter writer(dyn);
 
-    // Collecting, loading and writing take the step this export runs in, about evenly.
-    ProgressSteps steps({1.0, 1.0, 1.0});
+    ProgressSteps steps({
+        {"Collecting atom rows", 1.0},
+        {"Loading atom rows into DuckDB", 1.0},
+        {"Writing " + std::to_string(natoms) + " atom rows to Parquet", 1.0},
+    });
     ProgressReporter collectProgress("  Collecting atom rows", natoms);
     for(std::size_t i = 0; i < natoms; ++i){
         const std::string bucket = resolveBucket(i);
@@ -144,7 +146,7 @@ void streamAtomsToParquet(
         dyn.finishRow();
         collectProgress.update(i + 1);
     }
-    const auto collected = timer.elapsedTime();
+    log.dump(writer);
     steps.next();
 
     auto db = Volt::Detail::openInMemoryDb();
@@ -163,12 +165,7 @@ void streamAtomsToParquet(
         ddl += Detail::sqlTypeFor(col.type);
     }
     ddl += ')';
-    auto created = con.Query(ddl);
-    if(created->HasError()){
-        throw std::runtime_error(
-            "Failed to stage atoms for " + filePath + ": " + created->GetError()
-        );
-    }
+    Detail::createTable(con, ddl, "atoms", filePath);
 
     {
         duckdb::Appender appender(con, "atoms");
@@ -192,17 +189,26 @@ void streamAtomsToParquet(
             loadProgress.update(i + 1);
         }
         appender.Close();
+        log.dump(appender);
     }
-    const auto loaded = timer.elapsedTime();
-    steps.next("Writing " + std::to_string(natoms) + " atom rows to Parquet");
+    steps.next();
 
     Detail::copyTableToParquet(con, "atoms", filePath);
 
-    const auto total = timer.elapsedTime();
-    const std::size_t columnCount = 6 + (includeStructureColumns ? 2 : 0) + dyn.columns.size();
-    spdlog::info("  Wrote {} atom rows x {} columns ({}) in {}: collect {}, DuckDB load {}, Parquet {}",
-        natoms, columnCount, Detail::writtenFileSize(filePath), formatDuration(total),
-        formatDuration(collected), formatDuration(loaded - collected), formatDuration(total - loaded));
+    log.dump(ParquetAtomRows{natoms, 6 + (includeStructureColumns ? 2 : 0) + dyn.columns.size(), filePath});
+}
+
+AtomsTable writeAtomsTable(
+    const std::string& outputBase,
+    const LammpsParser::Frame& frame,
+    const BucketResolver& resolveBucket,
+    const PerAtomColumnWriter& writePerAtomColumns,
+    const StructureIdResolver& resolveStructureId,
+    bool includeStructureColumns
+){
+    AtomsTable table{outputPath(outputBase, "atoms")};
+    streamAtomsToParquet(table.path, frame, resolveBucket, writePerAtomColumns, resolveStructureId, includeStructureColumns);
+    return table;
 }
 
 }

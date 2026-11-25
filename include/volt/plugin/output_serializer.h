@@ -3,8 +3,8 @@
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/parquet_atom_writer.h>
 #include <volt/core/lammps_parser.h>
+#include <volt/core/run_log.h>
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
 
 #include <string>
 
@@ -27,16 +27,13 @@ inline void serializePluginOutput(
     const OutputConfig& config
 ) {
     if (!config.summaryFileSuffix.empty()) {
-        const std::string outputPath = outputBase + config.summaryFileSuffix + ".parquet";
-        JsonUtils::writeJsonToParquet(result, outputPath);
-        spdlog::info("Summary parquet written to {}", outputPath);
+        // The suffix carries the separator of the table's name ("_ackland_jones").
+        RunLog().dump(JsonUtils::writeSummaryTable(result, outputBase, config.summaryFileSuffix.substr(1)));
     }
 
     if (config.bucketResolver) {
-        const std::string atomsPath = outputBase + "_atoms.parquet";
-        spdlog::info("Exporting atoms data to: {}", atomsPath);
-        streamAtomsToParquet(atomsPath, frame, config.bucketResolver, config.perAtomColumnWriter,
-                             config.resolveStructureId, config.includeStructureColumns);
+        writeAtomsTable(outputBase, frame, config.bucketResolver, config.perAtomColumnWriter,
+                        config.resolveStructureId, config.includeStructureColumns);
     }
 }
 

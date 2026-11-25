@@ -4,16 +4,16 @@
 
 namespace Volt{
 
-void decomp_affine(Matrix4& A, AffineDecomposition* parts);
-
 AffineDecomposition::AffineDecomposition(const AffineTransformation& tm){
 	Matrix4 A(tm);
-    decomp_affine(A, this);
+    AffineDecompositionDetail::decomp_affine(A, this);
 
 	if(std::abs(scaling.Q.w()) >= double(1) || scaling.S.equals(Vector3(1,1,1))){
 		scaling.Q.setIdentity();
 	}
 }
+
+namespace AffineDecompositionDetail{
 
 enum QuatPart {X, Y, Z, W};
 
@@ -384,6 +384,8 @@ void decomp_affine(Matrix4& A, AffineDecomposition* parts){
 	parts->scaling.Q = Qt_FromMatrix(U);
     p = snuggle(parts->scaling.Q, parts->scaling.S);
     parts->scaling.Q = (parts->scaling.Q * p).normalized();
+}
+
 }
 
 }

@@ -1,11 +1,9 @@
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/duckdb_parquet.h>
-#include <volt/core/progress.h>
-
-#include "byte_size.h"
+#include <volt/utilities/parquet_writer_log.h>
+#include <volt/plugin/output_files.h>
 
 #include <duckdb.hpp>
-#include <spdlog/spdlog.h>
 
 #include <stdexcept>
 #include <string>
@@ -13,11 +11,7 @@
 
 namespace Volt {
 
-// Summaries are a few KiB and write in milliseconds; only per-atom or per-facet payloads take long
-// enough to be worth a line in the execution log.
-constexpr std::size_t kReportedPayloadBytes = std::size_t{16} << 20;
-
-std::string normalizeParquetPath(const std::string& filePath){
+std::string JsonUtils::normalizeParquetPath(const std::string& filePath){
     const std::string ext = ".parquet";
     if(filePath.size() >= ext.size() &&
        filePath.compare(filePath.size() - ext.size(), ext.size(), ext) == 0){
@@ -32,17 +26,12 @@ std::string normalizeParquetPath(const std::string& filePath){
 }
 
 void JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath, bool){
-    const Stopwatch timer;
+    ParquetWriterLog log;
     const std::string outputPath = normalizeParquetPath(filePath);
     auto db = Volt::Detail::openInMemoryDb();
     duckdb::Connection con(*db);
 
-    auto created = con.Query("CREATE TABLE t(payload VARCHAR)");
-    if(created->HasError()){
-        throw std::runtime_error(
-            "Failed to stage payload for " + outputPath + ": " + created->GetError()
-        );
-    }
+    Detail::createTable(con, "CREATE TABLE t(payload VARCHAR)", "payload", outputPath);
 
     std::size_t payloadBytes = 0;
     {
@@ -57,10 +46,31 @@ void JsonUtils::writeJsonToParquet(const json& data, const std::string& filePath
 
     Detail::copyTableToParquet(con, "t", outputPath);
 
-    if(payloadBytes >= kReportedPayloadBytes){
-        spdlog::info("  Wrote {} JSON payload as parquet ({}) in {}",
-            Detail::formatByteSize(payloadBytes), Detail::writtenFileSize(outputPath), timer.elapsed());
+    log.dump(ParquetJsonPayload{payloadBytes, outputPath});
+}
+
+json JsonUtils::readJsonFromParquet(const std::string& filePath){
+    auto db = Volt::Detail::openInMemoryDb();
+    duckdb::Connection con(*db);
+    auto result = con.Query("SELECT payload FROM read_parquet(" + Detail::sqlQuote(filePath) + ")");
+    if(result->HasError()){
+        throw std::runtime_error("DuckDB read of " + filePath + " failed: " + result->GetError());
     }
+    if(result->RowCount() == 0){
+        throw std::runtime_error("Parquet " + filePath + " has no rows");
+    }
+    return json::parse(result->GetValue(0, 0).ToString());
+}
+
+WrittenTable JsonUtils::writeSummaryTable(
+    const json& summary,
+    const std::string& outputBase,
+    std::string_view name,
+    std::string contents
+){
+    WrittenTable table{std::move(contents), Volt::outputPath(outputBase, name)};
+    writeJsonToParquet(summary, table.path);
+    return table;
 }
 
 bool JsonUtils::writeJsonToFile(const json& data, const std::string& filePath, int indent){

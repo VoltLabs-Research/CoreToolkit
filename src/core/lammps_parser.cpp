@@ -1,4 +1,5 @@
 #include <volt/core/lammps_parser.h>
+#include <volt/core/lammps_parser_log.h>
 #include <volt/core/progress.h>
 #include <lammpsio/reader_registry.hpp>
 #include <algorithm>
@@ -19,7 +20,6 @@
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 
-#include "../utilities/byte_size.h"
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <fcntl.h>
@@ -204,14 +204,6 @@ inline void writeDefaultExtraValue(std::ostream& out, DataType dataType){
     }
 }
 
-// tellp() counts the buffered bytes too, so the size needs no stat of a file that is still open.
-inline void logDumpWritten(std::ofstream& out, std::size_t atomCount, std::size_t columnCount, const Stopwatch& timer){
-    const std::streamoff bytes = out.tellp();
-    spdlog::info("  Wrote LAMMPS dump: {} atoms x {} columns ({}) in {}", atomCount, columnCount,
-        bytes >= 0 ? Detail::formatByteSize(static_cast<std::uintmax_t>(bytes)) : std::string("size unknown"),
-        timer.elapsed());
-}
-
 inline void writeExtraValue(std::ostream& out, const ExpandedExtraColumn& column, std::size_t rowIndex){
     const auto* row = static_cast<const std::uint8_t*>(column.data) + rowIndex * column.stride;
 
@@ -240,7 +232,7 @@ inline bool writeDump(
     const std::vector<int>* propertyRowsByAtomIndex,
     const std::vector<LammpsParser::ExtraHeader>& extraHeaders
 ){
-    const Stopwatch timer;
+    LammpsParserLog log;
     if(frame.natoms < 0){
         std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
         return false;
@@ -330,7 +322,8 @@ inline bool writeDump(
 
     const bool written = static_cast<bool>(out);
     if(written){
-        logDumpWritten(out, atomCount, 5 + extraColumns.size(), timer);
+        // tellp() counts the buffered bytes too, so the size needs no stat of a file that is still open.
+        log.dump(LammpsParserLog::WrittenDump{atomCount, 5 + extraColumns.size(), out.tellp()});
     }
     return written;
 }
@@ -375,7 +368,7 @@ inline bool writeMergedDump(
     const std::vector<LammpsParser::ExtraHeader>& extraHeaders,
     bool overwriteExistingColumns
 ){
-    const Stopwatch timer;
+    LammpsParserLog log;
     if(frame.natoms < 0){
         std::cerr << "Error: invalid atom count " << frame.natoms << std::endl;
         return false;
@@ -556,7 +549,7 @@ inline bool writeMergedDump(
 
     const bool written = static_cast<bool>(out);
     if(written){
-        logDumpWritten(out, atomCount, columnOrder.size(), timer);
+        log.dump(LammpsParserLog::WrittenDump{atomCount, columnOrder.size(), out.tellp()});
     }
     return written;
 }
@@ -644,17 +637,6 @@ inline bool toFrame(const lammpsio::ParsedFrame& parsed,
     return true;
 }
 
-// What the reader decided that the caller's load and cell lines do not show.
-inline void logParsedFrame(const lammpsio::ParsedFrame& parsed, const LammpsParser::Frame& frame){
-    spdlog::info("  Format: {}, {} cell, {}",
-        parsed.header.format ? parsed.header.format : "unknown",
-        buildDumpBoxBounds(frame.simulationCell).triclinic ? "triclinic" : "orthogonal",
-        frame.atomColumnsScaled ? "scaled coordinates converted to Cartesian" : "Cartesian coordinates");
-    if(frame.natoms > 0 && frame.ids.empty()){
-        spdlog::warn("  No atom id column: atoms are numbered by their order in the file");
-    }
-}
-
 }
 
 using namespace LammpsParserDetail;
@@ -677,7 +659,9 @@ bool LammpsParser::parseFile(const std::string &filename, Frame &frame){
     if(!LammpsParserDetail::toFrame(parsed, allocator, frame)){
         return false;
     }
-    LammpsParserDetail::logParsedFrame(parsed, frame);
+    LammpsParserLog().dump(LammpsParserLog::DecodedFrame{
+        parsed.header.format, buildDumpBoxBounds(frame.simulationCell).triclinic, frame
+    });
     return true;
 }
 
@@ -704,7 +688,9 @@ bool LammpsParser::parseBuffer(const char* data, std::size_t size, Frame &frame)
     if(!LammpsParserDetail::toFrame(parsed, allocator, frame)){
         return false;
     }
-    LammpsParserDetail::logParsedFrame(parsed, frame);
+    LammpsParserLog().dump(LammpsParserLog::DecodedFrame{
+        parsed.header.format, buildDumpBoxBounds(frame.simulationCell).triclinic, frame
+    });
     return true;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <volt/core/lammps_parser.h>
+#include <volt/utilities/written_table.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,16 @@ using StructureIdResolver = std::function<int(std::size_t atomIndex)>;
 
 void streamAtomsToParquet(
     const std::string& filePath,
+    const LammpsParser::Frame& frame,
+    const BucketResolver& resolveBucket,
+    const PerAtomColumnWriter& writePerAtomColumns = {},
+    const StructureIdResolver& resolveStructureId = {},
+    bool includeStructureColumns = false
+);
+
+// Writes the per-atom table of a run next to the output base, as <base>_atoms.parquet.
+AtomsTable writeAtomsTable(
+    const std::string& outputBase,
     const LammpsParser::Frame& frame,
     const BucketResolver& resolveBucket,
     const PerAtomColumnWriter& writePerAtomColumns = {},

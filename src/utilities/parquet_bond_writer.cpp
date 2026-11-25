@@ -1,11 +1,8 @@
 #include <volt/utilities/parquet_bond_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
-#include <volt/core/progress.h>
-
-#include "byte_size.h"
+#include <volt/utilities/parquet_writer_log.h>
 
 #include <duckdb.hpp>
-#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -94,7 +91,7 @@ void streamBondsToParquet(
     const std::vector<Bond>& bonds,
     const PerBondColumnWriter& writePerBondColumns
 ){
-    const Stopwatch timer;
+    ParquetWriterLog log;
     const std::size_t bondCount = bonds.size();
     const duckdb::LogicalType pointType = duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
 
@@ -139,12 +136,7 @@ void streamBondsToParquet(
         ddl += Detail::sqlTypeFor(col.type);
     }
     ddl += ')';
-    auto created = con.Query(ddl);
-    if(created->HasError()){
-        throw std::runtime_error(
-            "Failed to stage bonds for " + filePath + ": " + created->GetError()
-        );
-    }
+    Detail::createTable(con, ddl, "bonds", filePath);
 
     {
         duckdb::Appender appender(con, "bonds");
@@ -169,8 +161,7 @@ void streamBondsToParquet(
 
     Detail::copyTableToParquet(con, "bonds", filePath);
 
-    spdlog::info("  Wrote {} bond rows x {} columns ({}) in {}",
-        bondCount, 8 + dyn.columns.size(), Detail::writtenFileSize(filePath), timer.elapsed());
+    log.dump(ParquetBondRows{bondCount, 8 + dyn.columns.size(), filePath});
 }
 
 }

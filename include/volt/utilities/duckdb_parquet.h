@@ -34,6 +34,17 @@ inline std::string sqlQuote(const std::string& path){
     return out;
 }
 
+// Runs the CREATE TABLE of a writer's staging table, `what` the rows it stages, for the error that names the file.
+inline void createTable(duckdb::Connection& con, const std::string& ddl, const std::string& what,
+                        const std::string& filePath){
+    auto created = con.Query(ddl);
+    if(created->HasError()){
+        throw std::runtime_error(
+            "Failed to stage " + what + " for " + filePath + ": " + created->GetError()
+        );
+    }
+}
+
 inline void copyTableToParquet(duckdb::Connection& con,
                                const std::string& table,
                                const std::string& outputPath){

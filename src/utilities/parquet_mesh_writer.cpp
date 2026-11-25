@@ -1,11 +1,8 @@
 #include <volt/utilities/parquet_mesh_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
-#include <volt/core/progress.h>
-
-#include "byte_size.h"
+#include <volt/utilities/parquet_writer_log.h>
 
 #include <duckdb.hpp>
-#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -13,34 +10,20 @@
 
 namespace Volt {
 
-namespace {
-
-void createTable(duckdb::Connection& con, const std::string& ddl, const std::string& what,
-                 const std::string& filePath){
-    auto created = con.Query(ddl);
-    if(created->HasError()){
-        throw std::runtime_error(
-            "Failed to stage " + what + " for " + filePath + ": " + created->GetError()
-        );
-    }
-}
-
-}
-
 void streamMeshTablesToParquet(
     const std::string& verticesPath,
     const std::string& facetsPath,
     const std::vector<Point3>& vertices,
     const std::vector<std::array<int, 3>>& facets
 ){
-    const Stopwatch timer;
+    ParquetWriterLog log;
     auto db = Volt::Detail::openInMemoryDb();
     duckdb::Connection con(*db);
 
-    createTable(con,
+    Detail::createTable(con,
         "CREATE TABLE vertices(slot BIGINT, vertex_id BIGINT, x DOUBLE, y DOUBLE, z DOUBLE)",
         "vertices", verticesPath);
-    createTable(con,
+    Detail::createTable(con,
         "CREATE TABLE facets(ord BIGINT, a BIGINT, b BIGINT, c BIGINT)",
         "facets", facetsPath);
 
@@ -75,9 +58,7 @@ void streamMeshTablesToParquet(
     Detail::copyTableToParquet(con, "vertices", verticesPath);
     Detail::copyTableToParquet(con, "facets", facetsPath);
 
-    spdlog::info("  Wrote mesh tables: {} vertices ({}), {} facets ({}) in {}",
-        vertices.size(), Detail::writtenFileSize(verticesPath),
-        facets.size(), Detail::writtenFileSize(facetsPath), timer.elapsed());
+    log.dump(ParquetMeshTables{vertices.size(), verticesPath, facets.size(), facetsPath});
 }
 
 }

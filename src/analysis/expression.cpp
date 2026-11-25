@@ -8,14 +8,7 @@
 
 namespace Volt::Analysis{
 
-enum class TokenType{ Number, Identifier, String, Operator, LParen, RParen, Comma, Dot, Eof };
-
-struct Token{
-    TokenType type;
-    std::string value;
-    int line;
-    int column;
-};
+namespace ExpressionDetail{
 
 bool isDigit(char ch){ return ch >= '0' && ch <= '9'; }
 bool isIdentStart(char ch){ return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'; }
@@ -392,8 +385,6 @@ double applyBuiltin(const std::string& name, const std::vector<double>& args){
     throw ExpressionError("unknown function '" + name + "'");
 }
 
-Value evalNode(const Expr& expr, const AtomContext& context, std::size_t atomIndex);
-
 Value evalVariable(const std::string& name, const AtomContext& context, std::size_t atomIndex){
     if(name == "ParticleIndex") return static_cast<double>(atomIndex);
     if(name == "N") return static_cast<double>(context.N);
@@ -499,6 +490,10 @@ Value evalNode(const Expr& expr, const AtomContext& context, std::size_t atomInd
     }
     return 0.0;
 }
+
+}
+
+using namespace ExpressionDetail;
 
 Expr parse(const std::string& formula){
     Parser parser(tokenize(formula));

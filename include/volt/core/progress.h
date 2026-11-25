@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <initializer_list>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -47,6 +46,17 @@ public:
     Clock::duration elapsedTime() const { return Clock::now() - start_; }
     std::string elapsed() const { return formatDuration(elapsedTime()); }
 
+    long long milliseconds() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(elapsedTime()).count();
+    }
+
+    // The milliseconds since the last lap, and the next lap starts.
+    long long lapMilliseconds() {
+        const long long lap = milliseconds();
+        restart();
+        return lap;
+    }
+
 private:
     Clock::time_point start_;
 };
@@ -84,16 +94,14 @@ public:
     // The run's top steps, as pluginMain takes them: reading the input (a tenth of the run),
     // then the analysis, which plugins split further with ProgressSteps. A plugin with its own
     // main() calls beginInput, beginAnalysis and, once it succeeded, finish.
-    void beginInput(std::string text = "Reading the input frame") {
-        beginSteps({1.0, 9.0});
-        setText(std::move(text));
-    }
+    void beginInput(const std::string& text = "Reading the input frame") { beginSteps({1.0, 9.0}, text); }
 
-    void beginAnalysis(std::string text) { nextStep(std::move(text)); }
+    void beginAnalysis(const std::string& text) { nextStep(text); }
 
-    // Splits the current step into steps of these relative weights and enters the first.
-    // False when this thread does not drive the run's steps, and nothing was split.
-    bool beginSteps(std::initializer_list<double> weights) {
+    // Splits the current step into steps of these relative weights and enters the first, which
+    // does what `text` says. False when this thread does not drive the run's steps, and nothing
+    // was split.
+    bool beginSteps(const std::vector<double>& weights, const std::string& text) {
         if (!enabled_) return false;
         std::lock_guard lock(mutex_);
         if (levels_.empty()) owner_ = std::this_thread::get_id();
@@ -109,28 +117,16 @@ public:
         }
         if (level.bounds.size() < 2) level.bounds.push_back(1.0);
         levels_.push_back(std::move(level));
+        showStep(text);
         return true;
     }
 
-    // The current step is done; the next one of the same split starts. What the last step was
-    // doing no longer describes it, so the text goes back to the one of the step that was split.
-    void nextStep() {
+    // The current step is done; the next one of the same split starts, doing what `text` says.
+    void nextStep(const std::string& text) {
         if (!enabled_) return;
         std::lock_guard lock(mutex_);
         if (!enterNextStep()) return;
-        restoreText(levels_.back().text);
-        publish(currentRange().first);
-    }
-
-    // The next step, and what it does until one of its passes says otherwise. A step of no
-    // weight (a phase this run skips) keeps the text it found, since nothing runs in it.
-    void nextStep(std::string text) {
-        if (!enabled_) return;
-        std::lock_guard lock(mutex_);
-        if (!enterNextStep()) return;
-        const auto [low, high] = currentRange();
-        if (high > low) restoreText(oneLine(text));
-        publish(low);
+        showStep(text);
     }
 
     // The split is over, and the step it divided goes on (its own next step or finish() moves
@@ -187,6 +183,15 @@ private:
         Level& level = levels_.back();
         if (level.index + 2 < level.bounds.size()) ++level.index;
         return true;
+    }
+
+    // The text the step just entered runs under, until one of its passes says otherwise. A
+    // step with no text of its own is described by the step its split divides, and a step of
+    // no weight (a phase this run skips) keeps the text it found, since nothing runs in it.
+    void showStep(const std::string& text) {
+        const auto [low, high] = currentRange();
+        if (high > low) restoreText(text.empty() ? levels_.back().text : oneLine(text));
+        publish(low);
     }
 
     void restoreText(std::string text) {
@@ -259,32 +264,60 @@ private:
     Clock::time_point writtenAt_{};
 };
 
+// One step of a ProgressSteps split: what the job shows while it runs, and its share of the
+// split's time. A step this run skips stays in the list with `runs` false.
+struct ProgressStep {
+    std::string text;
+    double weight = 1.0;
+    bool runs = true;
+};
+
+// The weight of a step that is split into these steps.
+inline double totalWeight(const std::vector<ProgressStep>& steps) {
+    double total = 0.0;
+    for (const ProgressStep& step : steps) {
+        if (step.runs) total += std::max(0.0, step.weight);
+    }
+    return total;
+}
+
 // One weighted split of the current step, for a plugin with several passes:
-//     ProgressSteps steps({2, 5, 1});   // neighbor lists, classification, outputs
+//     ProgressSteps steps({
+//         {"Building neighbor lists", 2.0},
+//         {"Classifying atoms", 5.0},
+//         {"Writing the atoms table", 1.0, exportsAtoms},
+//     });
 //     ...; steps.next(); ...; steps.next(); ...
 // Passes reported with ProgressReporter fill the step they run in, and a step without one only
 // moves the value when it is over, so give each long pass of the split its own step. On a
 // thread that does not drive the run (see JobProgress) it does nothing.
 class ProgressSteps {
 public:
-    explicit ProgressSteps(std::initializer_list<double> weights)
-        : active_(JobProgress::instance().beginSteps(weights)) {}
+    explicit ProgressSteps(std::vector<ProgressStep> steps)
+        : steps_(std::move(steps))
+        , active_(!steps_.empty() && JobProgress::instance().beginSteps(weights(), steps_.front().text)) {}
     ProgressSteps(const ProgressSteps&) = delete;
     ProgressSteps& operator=(const ProgressSteps&) = delete;
     ~ProgressSteps() {
         if (active_) JobProgress::instance().endSteps();
     }
 
+    // The current step is done; the next one starts.
     void next() {
-        if (active_) JobProgress::instance().nextStep();
-    }
-
-    // The next step, and what it does when no pass of it says so.
-    void next(std::string text) {
-        if (active_) JobProgress::instance().nextStep(std::move(text));
+        if (!active_ || current_ + 1 >= steps_.size()) return;
+        JobProgress::instance().nextStep(steps_[++current_].text);
     }
 
 private:
+    std::vector<double> weights() const {
+        std::vector<double> result;
+        result.reserve(steps_.size());
+        for (const ProgressStep& step : steps_) result.push_back(step.runs ? step.weight : 0.0);
+        return result;
+    }
+
+    const std::vector<ProgressStep> steps_;
+    std::size_t current_ = 0;
     const bool active_;
 };
 

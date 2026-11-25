@@ -126,4 +126,10 @@ constexpr Vector_3<T> operator/(const Vector_3<T>& a, S s) noexcept {
 using Vector3 = Vector_3<double>;
 using Vector3I = Vector_3<int>;
 
+// A zero vector that lives as long as the program, for a function that returns one by reference.
+inline const Vector3& zeroVector(){
+	static const Vector3 vector = Vector3::Zero();
+	return vector;
+}
+
 }

@@ -1,6 +1,6 @@
 #include <volt/core/frame_adapter.h>
-#include <spdlog/spdlog.h>
 #include <cmath>
+#include <format>
 #include <utility>
 
 namespace Volt{
@@ -40,49 +40,67 @@ std::shared_ptr<ParticleProperty> createScalarPropertyShared(
 const LammpsParser::AtomColumn* requireColumn(
 	const LammpsParser::Frame& frame,
 	const std::string& columnName,
-	DataType expectedType
+	DataType expectedType,
+	std::string* errorMessage
 ){
 	const auto* column = frame.findAtomProperty(columnName);
 	if(!column){
-		spdlog::error("Frame is missing required atom column '{}'", columnName);
+		setError(errorMessage, std::format("Frame is missing required atom column '{}'", columnName));
 		return nullptr;
 	}
 	if(column->dataType != expectedType){
-		spdlog::error(
+		setError(errorMessage, std::format(
 			"Atom column '{}' has unexpected data type {} (expected {})",
 			columnName,
 			static_cast<int>(column->dataType),
 			static_cast<int>(expectedType)
-		);
+		));
 		return nullptr;
 	}
 	if(column->size() != static_cast<std::size_t>(frame.natoms)){
-		spdlog::error(
+		setError(errorMessage, std::format(
 			"Atom column '{}' has {} rows but frame reports {} atoms",
 			columnName,
 			column->size(),
 			frame.natoms
-		);
+		));
 		return nullptr;
 	}
 	return column;
+}
+
+std::shared_ptr<ParticleProperty> bindColumnShared(const LammpsParser::Frame& frame, const LammpsParser::AtomColumn& column){
+	switch(column.dataType){
+		case DataType::Int:
+			return createScalarPropertyShared(frame, column.ints, DataType::Int);
+		case DataType::Int64:
+			return createScalarPropertyShared(frame, column.int64s, DataType::Int64);
+		case DataType::Double:
+			return createScalarPropertyShared(frame, column.doubles, DataType::Double);
+		case DataType::Void:
+			break;
+	}
+	return nullptr;
 }
 
 }
 
 using namespace FrameAdapterDetail;
 
-std::shared_ptr<ParticleProperty> FrameAdapter::createPositionProperty(const LammpsParser::Frame& frame){
+std::shared_ptr<ParticleProperty> FrameAdapter::createPositionProperty(
+	const LammpsParser::Frame& frame,
+	std::string* errorMessage
+){
 	std::shared_ptr<ParticleProperty> property(new ParticleProperty(frame.natoms, ParticleProperty::PositionProperty, 0, true));
 
 	if(!property || property->size() != static_cast<size_t>(frame.natoms)){
-		spdlog::error("Failed to allocate ParticleProperty for positions with correct size");
+		setError(errorMessage, "Failed to allocate ParticleProperty for positions with correct size");
 		return nullptr;
 	}
 
 	Point3* data = property->dataPoint3();
 	if(!data){
-		spdlog::error("Failed to get position data pointer from ParticleProperty");
+		setError(errorMessage, "Failed to get position data pointer from ParticleProperty");
 		return nullptr;
 	}
 
@@ -93,18 +111,21 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createPositionProperty(const Lam
 	return property;
 }
 
-std::shared_ptr<ParticleProperty> FrameAdapter::createPositionPropertyShared(const LammpsParser::Frame& frame){
+std::shared_ptr<ParticleProperty> FrameAdapter::createPositionPropertyShared(
+	const LammpsParser::Frame& frame,
+	std::string* errorMessage
+){
 	auto property = std::make_shared<ParticleProperty>();
 	if(frame.positions.empty()){
-		spdlog::error("Frame positions buffer is empty");
+		setError(errorMessage, "Frame positions buffer is empty");
 		return nullptr;
 	}
 	if(frame.positions.size() < static_cast<std::size_t>(frame.natoms)){
-		spdlog::error(
+		setError(errorMessage, std::format(
 			"Frame positions buffer has {} entries but frame reports {} atoms",
 			frame.positions.size(),
 			frame.natoms
-		);
+		));
 		return nullptr;
 	}
 
@@ -138,25 +159,29 @@ bool FrameAdapter::prepareAnalysisInput(
 		return false;
 	}
 
-	if(!validateSimulationCell(frame.simulationCell)){
-		setError(errorMessage, "Invalid simulation cell");
+	std::string reason;
+	if(!validateSimulationCell(frame.simulationCell, &reason)){
+		setError(errorMessage, "Invalid simulation cell: " + reason);
 		return false;
 	}
 
-	prepared.positions = createPositionPropertyShared(frame);
+	prepared.positions = createPositionPropertyShared(frame, &reason);
 	if(!prepared.positions){
-		setError(errorMessage, "Failed to create position property");
+		setError(errorMessage, "Failed to create position property: " + reason);
 		return false;
 	}
 
 	return true;
 }
 
-std::shared_ptr<ParticleProperty> FrameAdapter::createIdentifierProperty(const LammpsParser::Frame& frame){
+std::shared_ptr<ParticleProperty> FrameAdapter::createIdentifierProperty(
+	const LammpsParser::Frame& frame,
+	std::string* errorMessage
+){
 	std::shared_ptr<ParticleProperty> property(new ParticleProperty(frame.ids.size(), ParticleProperty::IdentifierProperty, 1, false));
 
 	if(!property || property->size() != frame.ids.size()){
-		spdlog::error("Failed to allocate ParticleProperty for identifiers with correct size");
+		setError(errorMessage, "Failed to allocate ParticleProperty for identifiers with correct size");
 		return nullptr;
 	}
 
@@ -169,9 +194,10 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createIdentifierProperty(const L
 
 std::shared_ptr<ParticleProperty> FrameAdapter::createIntPropertyShared(
 	const LammpsParser::Frame& frame,
-	const std::string& columnName
+	const std::string& columnName,
+	std::string* errorMessage
 ){
-	const auto* column = requireColumn(frame, columnName, DataType::Int);
+	const auto* column = requireColumn(frame, columnName, DataType::Int, errorMessage);
 	if(!column){
 		return nullptr;
 	}
@@ -180,9 +206,10 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createIntPropertyShared(
 
 std::shared_ptr<ParticleProperty> FrameAdapter::createInt64PropertyShared(
 	const LammpsParser::Frame& frame,
-	const std::string& columnName
+	const std::string& columnName,
+	std::string* errorMessage
 ){
-	const auto* column = requireColumn(frame, columnName, DataType::Int64);
+	const auto* column = requireColumn(frame, columnName, DataType::Int64, errorMessage);
 	if(!column){
 		return nullptr;
 	}
@@ -194,12 +221,13 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createQuaternionPropertyShared(
 	const std::string& xColumn,
 	const std::string& yColumn,
 	const std::string& zColumn,
-	const std::string& wColumn
+	const std::string& wColumn,
+	std::string* errorMessage
 ){
-	const auto* x = requireColumn(frame, xColumn, DataType::Double);
-	const auto* y = requireColumn(frame, yColumn, DataType::Double);
-	const auto* z = requireColumn(frame, zColumn, DataType::Double);
-	const auto* w = requireColumn(frame, wColumn, DataType::Double);
+	const auto* x = requireColumn(frame, xColumn, DataType::Double, errorMessage);
+	const auto* y = x ? requireColumn(frame, yColumn, DataType::Double, errorMessage) : nullptr;
+	const auto* z = y ? requireColumn(frame, zColumn, DataType::Double, errorMessage) : nullptr;
+	const auto* w = z ? requireColumn(frame, wColumn, DataType::Double, errorMessage) : nullptr;
 	if(!x || !y || !z || !w){
 		return nullptr;
 	}
@@ -212,7 +240,7 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createQuaternionPropertyShared(
 		false
 	);
 	if(!property || property->size() != static_cast<std::size_t>(frame.natoms)){
-		spdlog::error("Failed to allocate quaternion property for {} atoms", frame.natoms);
+		setError(errorMessage, std::format("Failed to allocate quaternion property for {} atoms", frame.natoms));
 		return nullptr;
 	}
 
@@ -227,13 +255,27 @@ std::shared_ptr<ParticleProperty> FrameAdapter::createQuaternionPropertyShared(
 	return property;
 }
 
-bool FrameAdapter::validateSimulationCell(const SimulationCell& cell){
+std::shared_ptr<ParticleProperty> FrameAdapter::findColumnShared(
+	const LammpsParser::Frame& frame,
+	std::initializer_list<const char*> columnNames,
+	DataType dataType
+){
+	for(const char* columnName : columnNames){
+		const auto* column = frame.findAtomProperty(columnName);
+		if(column && column->dataType == dataType && column->size() == static_cast<std::size_t>(frame.natoms)){
+			return bindColumnShared(frame, *column);
+		}
+	}
+	return nullptr;
+}
+
+bool FrameAdapter::validateSimulationCell(const SimulationCell& cell, std::string* errorMessage){
 	const AffineTransformation& matrix = cell.matrix();
 	for(int i = 0; i < 3; i++){
 		for(int j = 0; j < 3; j++){
 			double value = matrix(i, j);
 			if(std::isnan(value) || std::isinf(value)){
-				spdlog::error("Invalid cell matrix component at ({},{}): {}", i, j, value);
+				setError(errorMessage, std::format("Invalid cell matrix component at ({},{}): {}", i, j, value));
 				return false;
 			}
 		}
@@ -241,7 +283,7 @@ bool FrameAdapter::validateSimulationCell(const SimulationCell& cell){
 
 	double volume = cell.volume3D();
 	if(volume <= 0 || std::isnan(volume) || std::isinf(volume)){
-		spdlog::error("Invalid cell volume: {}", volume);
+		setError(errorMessage, std::format("Invalid cell volume: {}", volume));
 		return false;
 	}
 

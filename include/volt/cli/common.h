@@ -2,15 +2,20 @@
 
 #include <volt/core/lammps_parser.h>
 #include <volt/core/progress.h>
+#include <volt/plugin/plugin_log.h>
 #include <volt/utilities/json_utils.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <filesystem>
 #include <map>
 #include <memory>
 #include <thread>
+#include <vector>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_sinks.h>
@@ -65,34 +70,36 @@ inline std::string deriveOutputBase(const std::string& filename, const std::stri
     return (inputPath.parent_path() / inputPath.stem()).string();
 }
 
-inline void logFrameLayout(const LammpsParser::Frame& frame) {
-    const auto& cell = frame.simulationCell;
-    const auto& pbc = cell.pbcFlags();
-    spdlog::info("Simulation cell: {:.3f} x {:.3f} x {:.3f}, volume {:.4g}, periodic [{} {} {}]",
-        cell.matrix().column(0).length(), cell.matrix().column(1).length(), cell.matrix().column(2).length(),
-        cell.volume3D(), pbc[0] ? "x" : "-", pbc[1] ? "y" : "-", pbc[2] ? "z" : "-");
-
-    std::string columns;
-    for (const auto& name : frame.atomColumnOrder) {
-        if (!columns.empty()) columns += ' ';
-        columns += name;
-    }
-    if (!columns.empty()) {
-        spdlog::info("Atom columns ({}): {}", frame.atomColumnOrder.size(), columns);
-    }
-}
-
-inline bool parseFrame(const std::string& filename, LammpsParser::Frame& frame) {
-    spdlog::info("Parsing LAMMPS file: {}", filename);
-    const Stopwatch timer;
+inline bool parseFrame(const std::string& filename, LammpsParser::Frame& frame, Plugin::PluginLog& log) {
+    log.dump(Plugin::PluginLog::InputFile{filename});
     LammpsParser parser;
     if (!parser.parseFile(filename, frame)) {
         spdlog::error("Failed to parse LAMMPS file: {}", filename);
         return false;
     }
-    spdlog::info("Successfully loaded {} atoms (timestep {}) in {}.", frame.natoms, frame.timestep, timer.elapsed());
-    logFrameLayout(frame);
+    log.dump(frame);
     return true;
+}
+
+inline bool parseFrame(const std::string& filename, LammpsParser::Frame& frame) {
+    Plugin::PluginLog log;
+    return parseFrame(filename, frame, log);
+}
+
+// The items of a list separated by `separator`, each trimmed of white space; empty items are left out.
+inline std::vector<std::string> splitList(std::string_view text, char separator) {
+    std::vector<std::string> items;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t end = std::min(text.find(separator, start), text.size());
+        std::size_t first = start;
+        std::size_t last = end;
+        while (first < last && std::isspace(static_cast<unsigned char>(text[first]))) ++first;
+        while (last > first && std::isspace(static_cast<unsigned char>(text[last - 1]))) --last;
+        if (last > first) items.emplace_back(text.substr(first, last - first));
+        start = end + 1;
+    }
+    return items;
 }
 
 inline bool getBool(const std::map<std::string, std::string>& opts, const std::string& key, bool defaultVal = false) {

@@ -73,6 +73,35 @@ using Value = std::variant<double, std::string>;
 
 [[nodiscard]] ColumnView columnFromProperty(const Particles::ParticleProperty& prop);
 
+// The tokenizer and the evaluation of the parsed expressions.
+namespace ExpressionDetail{
+
+enum class TokenType{ Number, Identifier, String, Operator, LParen, RParen, Comma, Dot, Eof };
+
+struct Token{
+    TokenType type;
+    std::string value;
+    int line;
+    int column;
+};
+
+bool isDigit(char ch);
+bool isIdentStart(char ch);
+bool isIdentPart(char ch);
+std::vector<Token> tokenize(const std::string& input);
+int binaryPrecedence(const std::string& op);
+BinaryOp toBinaryOp(const std::string& op);
+int componentIndex(const std::string& property);
+double readColumnNumeric(const ColumnView& column, std::size_t atomIndex, int component);
+double asNumber(const Value& value, const std::string& what);
+double applyBuiltin(const std::string& name, const std::vector<double>& args);
+Value evalVariable(const std::string& name, const AtomContext& context, std::size_t atomIndex);
+Value evalMember(const std::string& object, const std::string& property, const AtomContext& context, std::size_t atomIndex);
+Value evalBinary(const Expr& expr, const AtomContext& context, std::size_t atomIndex);
+Value evalNode(const Expr& expr, const AtomContext& context, std::size_t atomIndex);
+
+}
+
 }
 
 #endif

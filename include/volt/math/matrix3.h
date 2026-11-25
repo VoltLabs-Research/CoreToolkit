@@ -213,6 +213,24 @@ public:
 			  +((*this)[0][1]*(*this)[1][2] - (*this)[0][2]*(*this)[1][1])*((*this)[2][0]));
 	}
 
+	constexpr T trace() const noexcept {
+		return (*this)(0, 0) + (*this)(1, 1) + (*this)(2, 2);
+	}
+
+	// The angle of the rotation this matrix is, in radians, from its trace. The cosine is clamped, so the rounding in
+	// a computed rotation cannot take it out of the domain of acos.
+	inline T rotationAngle() const noexcept {
+		T cosine = (trace() - T(1)) / T(2);
+		if(cosine > T(1)) cosine = T(1);
+		if(cosine < T(-1)) cosine = T(-1);
+		return std::acos(cosine);
+	}
+
+	// The rotation Gram-Schmidt makes of the columns, with the third one flipped if they were left-handed; false, and
+	// output untouched, when a column is degenerate. Defined out of line (matrix3.cpp): inlined into a caller, the
+	// floating-point contraction around it moves the last bit of the cluster transitions built from it.
+	bool orthonormalized(Matrix_3& output) const noexcept;
+
 	constexpr Matrix_3 transposed() const noexcept {
 		return Matrix_3((*this)[0][0], (*this)[0][1], (*this)[0][2],
 						(*this)[1][0], (*this)[1][1], (*this)[1][2],
@@ -379,5 +397,11 @@ inline std::ostream& operator<<(std::ostream &os, const Matrix_3<T>& m) {
 }
 
 using Matrix3 = Matrix_3<double>;
+
+// An identity matrix that lives as long as the program, for a function that returns one by reference.
+inline const Matrix3& identityMatrix(){
+	static const Matrix3 matrix = Matrix3::Identity();
+	return matrix;
+}
 
 }

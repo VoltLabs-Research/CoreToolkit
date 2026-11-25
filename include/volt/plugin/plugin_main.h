@@ -5,7 +5,9 @@
 #include <volt/core/lammps_parser.h>
 #include <volt/core/progress.h>
 #include <volt/core/runtime_budget.h>
+#include <volt/plugin/plugin_log.h>
 
+#include <algorithm>
 #include <functional>
 #include <iostream>
 #include <optional>
@@ -37,6 +39,12 @@ enum class FrameMode {
 
 using DescriptorRefineFn = std::function<void(std::vector<CliOption>&, const OptsMap&)>;
 
+// How many worker threads a run takes when --threads is not given.
+enum class DefaultThreads { Hardware, PhysicalCores };
+
+// Whether the frame of --reference must hold as many atoms as the current frame.
+enum class ReferenceAtomCount { Same, Any };
+
 struct PluginDescriptor {
     std::string name;
     std::string description;
@@ -44,6 +52,13 @@ struct PluginDescriptor {
     bool needsReferenceFrame = false;
     FrameMode frameMode = FrameMode::Single;
     DescriptorRefineFn refine;
+    DefaultThreads defaultThreads = DefaultThreads::Hardware;
+    // Any: pluginMain also reads --reference, which the plugin declares itself, whatever its atom count (the lattice
+    // sites of a Wigner-Seitz analysis). The reference is then optional, and a run without one gets no reference.
+    ReferenceAtomCount referenceAtomCount = ReferenceAtomCount::Same;
+    // The binary's modes besides the analysis, with arguments of their own (self-tests): pluginMain hands them the
+    // arguments before it reads any, and returns the exit code of the mode they ask for.
+    std::function<std::optional<int>(int argc, char* argv[])> extraModes;
 };
 
 using PluginRunFn = std::function<json(
@@ -175,14 +190,19 @@ inline void logParameters(const PluginDescriptor& desc, const OptsMap& opts) {
 
 namespace Detail {
 
-inline void applyResourceBudget(const OptsMap& opts) {
-    const int requestedThreads = std::max(1, CLI::getInt(opts, "--threads",
-        std::thread::hardware_concurrency() > 0
-            ? static_cast<int>(std::thread::hardware_concurrency()) : 1));
-    Runtime::applyThreadBudget(requestedThreads);
+inline int defaultThreads(DefaultThreads policy) {
+    const int hardware = std::thread::hardware_concurrency() > 0
+        ? static_cast<int>(std::thread::hardware_concurrency()) : 1;
+    const int cores = policy == DefaultThreads::PhysicalCores ? Runtime::physicalCoreCount() : 0;
+    return cores > 0 ? std::min(hardware, cores) : hardware;
+}
+
+inline void applyResourceBudget(const OptsMap& opts, const PluginDescriptor& desc, PluginLog& log) {
+    const int requestedThreads = std::max(1, CLI::getInt(opts, "--threads", defaultThreads(desc.defaultThreads)));
+    log.dump(Runtime::applyThreadBudget(requestedThreads));
 
     if (CLI::getString(opts, "--numa", "off") == "auto") {
-        Runtime::bindToNumaNode();
+        log.dump(Runtime::bindToNumaNode());
     }
 }
 
@@ -221,80 +241,112 @@ inline std::vector<std::string> splitFrameList(const std::string& raw) {
     return files;
 }
 
-inline bool reportFailure(const json& result, const PluginDescriptor& desc, const Stopwatch& runTimer) {
-    if (result.value("is_failed", false)) {
-        spdlog::error("Analysis failed after {}: {}", runTimer.elapsed(), result.value("error", "Unknown error"));
-        return true;
-    }
-    spdlog::info("{} completed in {}.", desc.description, runTimer.elapsed());
-    return false;
+inline std::optional<int> runExtraModes(const PluginDescriptor& desc, int argc, char* argv[]) {
+    return desc.extraModes ? desc.extraModes(argc, argv) : std::nullopt;
 }
 
 // Exit code of the run; only one that succeeded reports it is done.
-inline int finishRun(const json& result, const PluginDescriptor& desc, const Stopwatch& runTimer) {
-    if (reportFailure(result, desc, runTimer)) return 1;
+inline int finishRun(const json& result, PluginLog& log) {
+    log.dump(PluginLog::RunResult{result});
+    if (result.value("is_failed", false)) return 1;
     JobProgress::instance().finish();
     return 0;
+}
+
+// The reference frame of a plugin that takes one: none when it needs no reference; the current frame itself when it
+// needs one and --reference was not given; false when the reference cannot be used.
+inline bool readReferenceFrame(
+    const OptsMap& opts,
+    const PluginDescriptor& desc,
+    const LammpsParser::Frame& frame,
+    LammpsParser::Frame& refFrame,
+    const LammpsParser::Frame*& refFramePtr,
+    PluginLog& log
+) {
+    refFramePtr = nullptr;
+    const bool anyAtomCount = desc.referenceAtomCount == ReferenceAtomCount::Any;
+    if (!desc.needsReferenceFrame && !anyAtomCount) return true;
+
+    const std::string refFile = CLI::getString(opts, "--reference");
+    if (refFile.empty()) {
+        if (desc.needsReferenceFrame) {
+            log.dump(PluginLog::ReferenceFrame{nullptr});
+            refFramePtr = &frame;
+        }
+        return true;
+    }
+
+    log.dump(PluginLog::ReferenceFile{refFile});
+    LammpsParser refParser;
+    if (!refParser.parseFile(refFile, refFrame)) {
+        spdlog::error("Failed to parse reference file: {}", refFile);
+        return false;
+    }
+    if (!anyAtomCount && refFrame.natoms != frame.natoms) {
+        spdlog::error("Atom count mismatch: current={} reference={}", frame.natoms, refFrame.natoms);
+        return false;
+    }
+    refFramePtr = &refFrame;
+    log.dump(PluginLog::ReferenceFrame{refFramePtr});
+    return true;
+}
+
+// pluginMain, with the line that logs the run's parameters given by the caller.
+inline int runPlugin(
+    int argc,
+    char* argv[],
+    const PluginDescriptor& desc,
+    const std::function<void(const OptsMap&)>& logRunParameters,
+    const PluginRunFn& run
+) {
+    if (auto exitCode = runExtraModes(desc, argc, argv)) {
+        return *exitCode;
+    }
+    if (argc < 2) {
+        showPluginUsage(argv[0], desc);
+        return 1;
+    }
+
+    std::string filename, outputBase;
+    auto opts = CLI::parseArgs(argc, argv, filename, outputBase);
+
+    if (auto exitCode = handleIntrospection(argv[0], desc, opts, filename)) {
+        return *exitCode;
+    }
+
+    CLI::initLogging(desc.name);
+    PluginLog log(desc.description);
+    applyResourceBudget(opts, desc, log);
+    logRunParameters(opts);
+    JobProgress& progress = JobProgress::instance();
+    progress.beginInput();
+
+    LammpsParser::Frame frame;
+    if (!CLI::parseFrame(filename, frame, log)) return 1;
+
+    LammpsParser::Frame refFrame;
+    const LammpsParser::Frame* refFramePtr = nullptr;
+    if (!readReferenceFrame(opts, desc, frame, refFrame, refFramePtr, log)) return 1;
+
+    outputBase = CLI::deriveOutputBase(filename, outputBase);
+    log.dump(PluginLog::OutputBase{outputBase});
+
+    progress.beginAnalysis(desc.description);
+    json result = runReportingFailures([&]{ return run(opts, frame, refFramePtr, outputBase); });
+
+    return finishRun(result, log);
 }
 
 }
 
 inline int pluginMain(int argc, char* argv[], const PluginDescriptor& desc, PluginRunFn run) {
-    if (argc < 2) {
-        showPluginUsage(argv[0], desc);
-        return 1;
-    }
-
-    std::string filename, outputBase;
-    auto opts = CLI::parseArgs(argc, argv, filename, outputBase);
-
-    if (auto exitCode = handleIntrospection(argv[0], desc, opts, filename)) {
-        return *exitCode;
-    }
-
-    CLI::initLogging(desc.name);
-    const Stopwatch runTimer;
-    Detail::applyResourceBudget(opts);
-    logParameters(desc, opts);
-    JobProgress& progress = JobProgress::instance();
-    progress.beginInput();
-
-    LammpsParser::Frame frame;
-    if (!CLI::parseFrame(filename, frame)) return 1;
-
-    LammpsParser::Frame refFrame;
-    const LammpsParser::Frame* refFramePtr = nullptr;
-
-    if (desc.needsReferenceFrame) {
-        std::string refFile = CLI::getString(opts, "--reference");
-        if (!refFile.empty()) {
-            spdlog::info("Parsing reference file: {}", refFile);
-            const Stopwatch refTimer;
-            LammpsParser refParser;
-            if (!refParser.parseFile(refFile, refFrame)) {
-                spdlog::error("Failed to parse reference file: {}", refFile);
-                return 1;
-            }
-            if (refFrame.natoms != frame.natoms) {
-                spdlog::error("Atom count mismatch: current={} reference={}",
-                    frame.natoms, refFrame.natoms);
-                return 1;
-            }
-            refFramePtr = &refFrame;
-            spdlog::info("Reference loaded: {} atoms (timestep {}) in {}", refFrame.natoms, refFrame.timestep, refTimer.elapsed());
-        }
-    }
-
-    outputBase = CLI::deriveOutputBase(filename, outputBase);
-    spdlog::info("Output base: {}", outputBase);
-
-    progress.beginAnalysis(desc.description);
-    json result = Detail::runReportingFailures([&]{ return run(opts, frame, refFramePtr, outputBase); });
-
-    return Detail::finishRun(result, desc, runTimer);
+    return Detail::runPlugin(argc, argv, desc, [&desc](const OptsMap& opts) { logParameters(desc, opts); }, run);
 }
 
 inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& desc, PluginMultiFrameRunFn run) {
+    if (auto exitCode = Detail::runExtraModes(desc, argc, argv)) {
+        return *exitCode;
+    }
     if (argc < 2) {
         showPluginUsage(argv[0], desc);
         return 1;
@@ -308,8 +360,8 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     }
 
     CLI::initLogging(desc.name);
-    const Stopwatch runTimer;
-    Detail::applyResourceBudget(opts);
+    PluginLog log(desc.description);
+    Detail::applyResourceBudget(opts, desc, log);
     logParameters(desc, opts);
     JobProgress& progress = JobProgress::instance();
 
@@ -325,7 +377,7 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     progress.beginInput(frameFiles.size() == 1 ? "Reading the input frame" : "Reading " + std::to_string(frameFiles.size()) + " input frames");
     std::vector<LammpsParser::Frame> frames(frameFiles.size());
     for (std::size_t i = 0; i < frameFiles.size(); ++i) {
-        if (!CLI::parseFrame(frameFiles[i], frames[i])) {
+        if (!CLI::parseFrame(frameFiles[i], frames[i], log)) {
             spdlog::error("Failed to parse window frame: {}", frameFiles[i]);
             return 1;
         }
@@ -336,12 +388,12 @@ inline int pluginMainMultiFrame(int argc, char* argv[], const PluginDescriptor& 
     if (primaryIndex >= frames.size()) primaryIndex = 0;
 
     outputBase = CLI::deriveOutputBase(filename, outputBase);
-    spdlog::info("Output base: {} ({} frames, primary index {})", outputBase, frames.size(), primaryIndex);
+    log.dump(PluginLog::OutputBase{outputBase, frames.size(), primaryIndex});
 
     progress.beginAnalysis(desc.description);
     json result = Detail::runReportingFailures([&]{ return run(opts, frames, primaryIndex, outputBase); });
 
-    return Detail::finishRun(result, desc, runTimer);
+    return Detail::finishRun(result, log);
 }
 
 }

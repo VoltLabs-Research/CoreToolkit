@@ -212,4 +212,11 @@ protected:
     std::shared_ptr<void> _externalOwner;
 };
 
+namespace PropertyBaseDetail{
+
+size_t resolveDataTypeSize(DataType dataType);
+size_t resolveStride(DataType dataType, size_t componentCount, size_t stride);
+
+}
+
 }

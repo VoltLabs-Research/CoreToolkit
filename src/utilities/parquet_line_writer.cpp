@@ -1,11 +1,8 @@
 #include <volt/utilities/parquet_line_writer.h>
 #include <volt/utilities/duckdb_parquet.h>
-#include <volt/core/progress.h>
-
-#include "byte_size.h"
+#include <volt/utilities/parquet_writer_log.h>
 
 #include <duckdb.hpp>
-#include <spdlog/spdlog.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -93,7 +90,7 @@ void streamLinesToParquet(
     const LinePointsResolver& resolvePoints,
     const PerLineColumnWriter& writePerLineColumns
 ){
-    const Stopwatch timer;
+    ParquetWriterLog log;
     const duckdb::LogicalType pointType = duckdb::LogicalType::LIST(duckdb::LogicalType::DOUBLE);
 
     std::vector<duckdb::Value> pointLists;
@@ -135,12 +132,7 @@ void streamLinesToParquet(
         ddl += Detail::sqlTypeFor(col.type);
     }
     ddl += ')';
-    auto created = con.Query(ddl);
-    if(created->HasError()){
-        throw std::runtime_error(
-            "Failed to stage lines for " + filePath + ": " + created->GetError()
-        );
-    }
+    Detail::createTable(con, ddl, "lines", filePath);
 
     {
         duckdb::Appender appender(con, "lines");
@@ -158,8 +150,7 @@ void streamLinesToParquet(
 
     Detail::copyTableToParquet(con, "lines", filePath);
 
-    spdlog::info("  Wrote {} line rows x {} columns, {} points ({}) in {}",
-        lineCount, 2 + dyn.columns.size(), pointCount, Detail::writtenFileSize(filePath), timer.elapsed());
+    log.dump(ParquetLineRows{lineCount, 2 + dyn.columns.size(), pointCount, filePath});
 }
 
 }

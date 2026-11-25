@@ -5,6 +5,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace Volt::Plugin {
@@ -61,6 +62,42 @@ OptionBinding<S> opt(const char* name, const char* help, T def, void(S::*setter)
     }
 }
 
+// An option that sets a field of a struct of options; the field's own value is its default.
+template<typename T, typename S>
+    requires std::is_arithmetic_v<T>
+OptionBinding<S> opt(const char* name, const char* help, T S::* field) {
+    const T def = S{}.*field;
+    if constexpr (std::is_same_v<T, bool>) {
+        return {
+            {name, "bool", help, def ? "true" : "false"},
+            [field, name](S& s, const OptsMap& opts) {
+                s.*field = CLI::getBool(opts, name, s.*field);
+            }
+        };
+    } else if constexpr (std::is_same_v<T, float>) {
+        return {
+            {name, "float", help, Detail::formatDefault(static_cast<double>(def))},
+            [field, name](S& s, const OptsMap& opts) {
+                s.*field = static_cast<float>(CLI::getDouble(opts, name, static_cast<double>(s.*field)));
+            }
+        };
+    } else if constexpr (std::is_same_v<T, double>) {
+        return {
+            {name, "float", help, Detail::formatDefault(def)},
+            [field, name](S& s, const OptsMap& opts) {
+                s.*field = CLI::getDouble(opts, name, s.*field);
+            }
+        };
+    } else if constexpr (std::is_same_v<T, int>) {
+        return {
+            {name, "int", help, std::to_string(def)},
+            [field, name](S& s, const OptsMap& opts) {
+                s.*field = CLI::getInt(opts, name, s.*field);
+            }
+        };
+    }
+}
+
 template<typename S>
 OptionBinding<S> opt(const char* name, const char* help, const char* def, void(S::*setter)(std::string)) {
     return {
@@ -76,28 +113,11 @@ OptionBinding<S> opt(CliOption meta, std::function<void(S&, const OptsMap&)> fn)
     return {std::move(meta), std::move(fn)};
 }
 
-namespace Detail {
-inline std::vector<std::string> splitAllowed(const char* allowed) {
-    std::vector<std::string> values;
-    std::string current;
-    for (const char* c = allowed; *c; ++c) {
-        if (*c == '|') {
-            if (!current.empty()) values.push_back(std::move(current));
-            current.clear();
-        } else {
-            current.push_back(*c);
-        }
-    }
-    if (!current.empty()) values.push_back(std::move(current));
-    return values;
-}
-}
-
 template<typename S>
 OptionBinding<S> optLattice(const char* name, const char* allowed, const char* def,
                             void(S::*setter)(LatticeStructureType)) {
     return {
-        {name, "enum", "Crystal structure to match against.", def, Detail::splitAllowed(allowed)},
+        {name, "enum", "Crystal structure to match against.", def, CLI::splitList(allowed, '|')},
         [setter, name, dv = std::string(def)](S& s, const OptsMap& opts) {
             LatticeStructureType t{};
             parseLatticeStructureType(dv, t);
@@ -107,7 +127,7 @@ OptionBinding<S> optLattice(const char* name, const char* allowed, const char* d
     };
 }
 
-inline std::optional<json> requireOptions(const OptsMap& opts, std::initializer_list<const char*> required) {
+inline std::optional<json> requireOptions(const OptsMap& opts, const std::vector<const char*>& required) {
     for (const char* key : required) {
         if (!CLI::hasOption(opts, key))
             return AnalysisResult::failure(std::string(key) + " is required");
@@ -128,6 +148,38 @@ std::vector<CliOption> optionsMeta(const std::vector<OptionBinding<S>>& bindings
     for (const auto& b : bindings)
         result.push_back(b.meta);
     return result;
+}
+
+template<typename Options>
+using OptionsRunFn = std::function<json(
+    const Options& options,
+    const LammpsParser::Frame& frame,
+    const LammpsParser::Frame* refFrame,
+    const std::string& outputBase
+)>;
+
+// pluginMain for a plugin whose flags fill a struct of options. They are read once, where the run's parameters are
+// logged, and logResolved logs the values they resolved to instead of the generic "Parameters:" line, which shows the
+// flags as parsed: a negative number such as "--typeA -1" reaches parseArgs as a bare flag, "true".
+template<typename Options>
+int pluginMain(
+    int argc,
+    char* argv[],
+    const PluginDescriptor& desc,
+    const std::vector<OptionBinding<Options>>& bindings,
+    std::type_identity_t<std::function<void(const Options&)>> logResolved,
+    std::type_identity_t<OptionsRunFn<Options>> run
+) {
+    Options options;
+    return Detail::runPlugin(argc, argv, desc,
+        [&](const OptsMap& opts) {
+            applyAll(options, bindings, opts);
+            logResolved(options);
+        },
+        [&](const OptsMap&, const LammpsParser::Frame& frame, const LammpsParser::Frame* refFrame,
+            const std::string& outputBase) {
+            return run(options, frame, refFrame, outputBase);
+        });
 }
 
 }

@@ -5,8 +5,10 @@
 #include <duckdb.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace Volt {
 
@@ -59,6 +61,38 @@ void streamMeshTablesToParquet(
     Detail::copyTableToParquet(con, "facets", facetsPath);
 
     log.dump(ParquetMeshTables{vertices.size(), verticesPath, facets.size(), facetsPath});
+}
+
+nlohmann::json writeMeshTables(
+    const std::string& filePath,
+    const std::vector<Point3>& vertices,
+    const std::vector<std::array<int, 3>>& facets,
+    const SimulationCell& cell
+){
+    constexpr std::string_view extension = ".parquet";
+    const std::string basePath = filePath.ends_with(extension)
+        ? filePath.substr(0, filePath.size() - extension.size())
+        : filePath;
+    const std::string verticesPath = basePath + ".vertices.parquet";
+    const std::string facetsPath = basePath + ".facets.parquet";
+    streamMeshTablesToParquet(verticesPath, facetsPath, vertices, facets);
+
+    const AffineTransformation& matrix = cell.matrix();
+    nlohmann::json doc;
+    doc["main_listing"] = {
+        {"total_nodes", vertices.size()},
+        {"total_facets", facets.size()}
+    };
+    doc["export"]["MeshExporter"][kParquetSourceKey] = {
+        {"vertices", std::filesystem::path(verticesPath).filename().string()},
+        {"facets", std::filesystem::path(facetsPath).filename().string()},
+        {"cell", {
+            {"matrix", {matrix.column(0), matrix.column(1), matrix.column(2)}},
+            {"origin", matrix.column(3)},
+            {"pbc", cell.pbcFlags()}
+        }}
+    };
+    return doc;
 }
 
 }

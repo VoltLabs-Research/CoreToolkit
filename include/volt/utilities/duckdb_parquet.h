@@ -1,14 +1,18 @@
 #pragma once
 
 #include <volt/core/runtime_budget.h>
+#include <volt/utilities/columnar_row_writer.h>
 
 #include <duckdb.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Volt::Detail {
@@ -101,5 +105,35 @@ inline std::string quoteIdent(const std::string& name){
     out.push_back('"');
     return out;
 }
+
+}
+
+namespace Volt {
+
+// The columns a ColumnarRowWriter collected, kept until the writer creates its table and appends the rows.
+struct ColumnarRowWriter::Impl {
+    // The table's own columns: a caller's value for one of them is dropped.
+    std::vector<std::string_view> reserved;
+    std::vector<Detail::DynColumn> columns;
+    std::unordered_map<std::string, std::size_t> index;
+    std::int64_t rowsCompleted = 0;
+
+    explicit Impl(std::vector<std::string_view> reservedColumns) : reserved(std::move(reservedColumns)) {}
+
+    void appendDouble(const std::string& name, double value);
+    void appendInt64(const std::string& name, std::int64_t value);
+    void appendString(const std::string& name, const std::string& value);
+    void appendList(const std::string& name, const std::vector<double>& values);
+    // Gives every column this row did not write a null.
+    void finishRow();
+
+    // ", <name> <type>" for each column, after the table's own in its CREATE TABLE.
+    std::string columnsDdl() const;
+    void appendColumns(duckdb::Appender& appender, std::size_t row) const;
+
+private:
+    bool isReserved(const std::string& name) const;
+    Detail::DynColumn& ensure(const std::string& name, Detail::ColType type);
+};
 
 }

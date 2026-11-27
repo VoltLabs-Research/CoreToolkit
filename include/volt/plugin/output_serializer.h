@@ -15,7 +15,7 @@ using json = nlohmann::json;
 struct OutputConfig {
     std::string summaryFileSuffix;
     BucketResolver bucketResolver;
-    PerAtomColumnWriter perAtomColumnWriter;
+    RowColumnWriter perAtomColumnWriter;
     StructureIdResolver resolveStructureId;
     bool includeStructureColumns = false;
 };

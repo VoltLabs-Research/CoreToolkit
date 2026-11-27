@@ -5,7 +5,7 @@
 
 namespace Volt{
 
-void ParquetWriterLog::dump(const ColumnarAtomWriter&){
+void ParquetWriterLog::dump(const ColumnarRowWriter&){
     _collected = phaseElapsed();
 }
 

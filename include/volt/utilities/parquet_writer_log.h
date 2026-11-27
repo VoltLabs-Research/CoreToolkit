@@ -11,7 +11,7 @@ class Appender;
 
 namespace Volt{
 
-class ColumnarAtomWriter;
+class ColumnarRowWriter;
 
 // What a Parquet writer wrote, for its indented line in the execution log.
 struct ParquetAtomRows{
@@ -51,7 +51,7 @@ public:
     using RunLog::dump;
 
     // The atom rows, collected and then loaded into DuckDB: the atoms table's line times both phases.
-    void dump(const ColumnarAtomWriter& collectedRows);
+    void dump(const ColumnarRowWriter& collectedRows);
     void dump(const duckdb::Appender& loadedRows);
     void dump(const ParquetAtomRows& table);
     void dump(const ParquetBondRows& table);
